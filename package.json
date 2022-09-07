@@ -14,6 +14,7 @@
 	"com.rhinox.open.guiutils": "1.5.1",
 	"com.rhinox.open.perceptor": "0.1.6",
     "com.rhinox.open.utilities": "1.1.14",
+    "com.unity.addressables": "1.19.19"
   },
   "repository": {
     "type": "git",
