@@ -1,0 +1,350 @@
+﻿using System;
+using System.Collections;
+using System.Collections.Generic;
+using System.Globalization;
+using System.IO;
+using System.Linq;
+using Newtonsoft.Json;
+using Newtonsoft.Json.Linq;
+using Rhinox.Lightspeed;
+using Rhinox.Lightspeed.IO;
+using Rhinox.Perceptor;
+using UnityEngine;
+using UnityEngine.AddressableAssets;
+using UnityEngine.AddressableAssets.Initialization;
+using UnityEngine.AddressableAssets.ResourceLocators;
+using UnityEngine.ResourceManagement.AsyncOperations;
+using UnityEngine.ResourceManagement.ResourceLocations;
+using UnityEngine.ResourceManagement.Util;
+
+namespace Rhinox.Scrapper
+{
+    public static class Scrapper
+    {
+        private static InitializingState _initializingState;
+
+        public static bool Initialized => _initializingState == InitializingState.Initialized;
+        private static string _rootPath;
+        internal static string RootPath => _rootPath;
+        private static Dictionary<string, MirroredResourceCatalog> _resourceLocators;
+
+        public static IReadOnlyCollection<string> LoadedCatalogs =>
+            _resourceLocators != null ? (IReadOnlyCollection<string>) _resourceLocators.Keys : Array.Empty<string>();
+
+        public delegate void CatalogLoadEventHandler(string catalogLocatorId);
+        public static event CatalogLoadEventHandler CatalogLoaded;
+
+        public delegate void PreloadEventHandler(object[] keys);
+        public static event PreloadEventHandler PreloadCompleted;
+
+        private enum InitializingState
+        {
+            None,
+            Initializing,
+            Initialized
+        }
+
+        public static IEnumerator InitializeAsync()
+        {
+            PLog.Debug($"{nameof(InitializeAsync)} started...");
+            if (_initializingState != InitializingState.None)
+            {
+                PLog.Debug($"{nameof(InitializeAsync)} cancelled, current state: {_initializingState.ToString()}");
+                yield break;
+            }
+
+            _initializingState = InitializingState.Initializing;
+            AsyncOperationHandle initAction = Addressables.InitializeAsync(true);
+
+            
+            if (!initAction.IsValid())
+            {
+                _initializingState = InitializingState.None;
+                PLog.Warn<ScrapperLogger>("Failed to initialize Scrapper, Addressable initialization failed...");
+                yield break;
+            }
+
+            yield return initAction;
+            
+            
+            Addressables.ClearResourceLocators();
+
+            if (!TryInitializeCacheFolder())
+            {
+                _initializingState = InitializingState.None;
+                PLog.Warn<ScrapperLogger>("Failed to initialize Scrapper, cache folder could not be created/loaded...");
+                yield break;
+            }
+            
+            _initializingState = InitializingState.Initialized;
+            PLog.Debug<ScrapperLogger>($"Scrapper initialized.");
+        }
+
+        private static bool TryInitializeCacheFolder()
+        {
+            string rootPath = Application.persistentDataPath;
+            string path = Path.GetFullPath(Path.Combine(rootPath, "com.rhinox.open.scrapper")).Replace("\\", "/");
+            if (FileHelper.DirectoryExists(path))
+            {
+                _rootPath = path;
+                return true;
+            }
+
+            try
+            {
+                FileHelper.CreateDirectoryIfNotExists(path);
+            }
+            catch (Exception e)
+            {
+                PLog.Error<ScrapperLogger>($"Create Directory at '{path}' failed, reason: {e.ToString()}");
+                _rootPath = null;
+                return false;
+            }
+
+            _rootPath = path;
+            return true;
+        }
+
+        public static IEnumerator LoadCatalogAsync(string remotePath)
+        {
+            if (!remotePath.EndsWith(".json"))
+            {
+                PLog.Debug<ScrapperLogger>($"Path not supported for catalog '{remotePath}', must end in .json");
+                yield break;
+            }
+
+            // Handle hash file
+            bool cacheUpdateRequired = false;
+            if (CheckAndUpdateLocalHash(remotePath, out bool catalogChanged))
+            {
+                cacheUpdateRequired = true;
+                // Handle catalog
+                string catalogCachePath = AddressableUtility.GetCachePathForCatalog(remotePath, ".json");
+                if (!FileHelper.Exists(catalogCachePath) || catalogChanged)
+                    SetupCatalog(remotePath, catalogCachePath);
+            }
+
+            // Load cached catalog in Addressable system
+            PLog.Debug<ScrapperLogger>($"{nameof(LoadCatalogAsync)} load content catalog at {remotePath}...");
+            var catalogResult = new CatalogLoadResult();
+            yield return AddressableUtility.LoadContentCatalogAsync(remotePath, catalogResult);
+
+            if (catalogResult.Status != AsyncOperationStatus.Succeeded)
+            {
+                PLog.Error<ScrapperLogger>($"Load Content Catalog failed");
+                yield break;
+            }
+
+            var resourceLocator = catalogResult.Result;
+
+            if (_resourceLocators == null)
+                _resourceLocators = new Dictionary<string, MirroredResourceCatalog>();
+
+            if (_resourceLocators.ContainsKey(resourceLocator.LocatorId))
+            {
+                PLog.Warn<ScrapperLogger>($"ResourceLocator with id '{resourceLocator.LocatorId}' already registered, exiting...");
+                yield break;
+            }
+            
+            Addressables.AddResourceLocator(resourceLocator);
+
+            var localCachePath = Path.GetFullPath(Path.Combine(_rootPath, AddressableUtility.GetCatalogHashName(remotePath)));
+            var remoteDataPath = remotePath.Replace(Path.GetFileName(remotePath), "");
+            var mirrorCache = new MirroredResourceCatalog(resourceLocator, new MirrorDownloader(remoteDataPath, localCachePath));
+            if (cacheUpdateRequired)
+                mirrorCache.ClearCache(); // Create new mirrorCache
+            _resourceLocators.Add(resourceLocator.LocatorId, mirrorCache);
+            
+            CatalogLoaded?.Invoke(resourceLocator.LocatorId);
+            
+            PLog.Debug($"{nameof(LoadCatalogAsync)} completed...");
+        }
+
+
+        public static IEnumerator PreloadAsync(params object[] keys)
+        {
+            return PreloadAsync((Action<float>) null, keys);
+        }
+
+        public static IEnumerator PreloadAsync(Action<float> progressHandler, params object[] keys)
+        {
+            foreach (var loaderKey in _resourceLocators.Keys)
+            {
+                var locator = _resourceLocators[loaderKey];
+                var preloadEnumerator = locator.PreloadAllAssetsAsync(keys);
+                yield return preloadEnumerator.Current;
+                while (preloadEnumerator.MoveNext())
+                {
+                    var progress = preloadEnumerator.Current is float ? (float) preloadEnumerator.Current : 0.0f;
+                    progressHandler?.Invoke(progress);
+                    yield return null;
+                }
+
+                yield return null;
+            }
+
+            PLog.Debug<ScrapperLogger>($"PreloadAsync finished for {string.Join(", ", keys)}");
+            PreloadCompleted?.Invoke(keys);
+        }
+        
+        public static IEnumerator LoadAssetAsync<T>(string key, Action<T> onCompleted, T fallbackObject = default(T))
+        {
+            if (!Initialized)
+            {
+                PLog.Warn<ScrapperLogger>($"Scrapper not initialized, skipping...");
+                yield break;
+            }
+
+            T loadedAsset = default(T);
+            if (HasResourceOfType<T>(key))
+            {
+                var loadAsset = Addressables.LoadAssetAsync<T>(key);
+                yield return loadAsset;
+                
+                if(loadAsset.Status != AsyncOperationStatus.Succeeded)
+                    PLog.Error($"Load of resource with key: '{key}' failed: {loadAsset.Status}");
+                loadedAsset = loadAsset.Result;
+            }
+            else
+            {
+                PLog.Warn($"Asset with key: '{key}' is missing, setting {fallbackObject} as replacement (loaded catalog: {_resourceLocators.Count})");
+                loadedAsset = fallbackObject;
+            }
+
+            PLog.Info($"Loaded '{loadedAsset}' of type '{loadedAsset?.GetType().Name ?? "None"}' from path {key}");
+            onCompleted?.Invoke(loadedAsset);
+
+            Addressables.Release(loadedAsset);
+            
+            yield return null;
+        }
+        
+        public static bool HasResourceOfType<T>(object key)
+        {
+            foreach (var catalog in _resourceLocators.Values)
+            {
+                if (catalog.Locator.Locate(key, typeof(T), out IList<IResourceLocation> locs))
+                    return true;
+            }
+            return false;
+        }
+        
+        public static bool HasResource(object key)
+        {
+            return HasResourceOfType<object>(key);
+        }
+
+        private static bool CheckAndUpdateLocalHash(string remotePath, out bool hashChanged)
+        {
+            bool localHashMatchesRemote = false;
+            string hashCachePath = AddressableUtility.GetCachePathForCatalog(remotePath);
+            string remoteHashPath = remotePath.Replace(".json", ".hash");
+            string remoteHash = FileHelper.ReadAllText(remoteHashPath);
+            if (remoteHash == null)
+            {
+                PLog.Debug<ScrapperLogger>($"Failed to fetch text from '{remoteHashPath}'");
+                hashChanged = false;
+                return false;
+            }
+
+            if (!FileHelper.Exists(hashCachePath))
+            {
+                File.WriteAllText(hashCachePath, remoteHash);
+            }
+            else
+            {
+                string localHash = FileHelper.ReadAllText(hashCachePath);
+                if (localHash != null && localHash.Equals(remoteHash))
+                    localHashMatchesRemote = true;
+                else
+                    File.WriteAllText(hashCachePath, remoteHash);
+            }
+
+            hashChanged = !localHashMatchesRemote;
+            return true;
+        }
+
+        private static void SetupCatalog(string remotePath, string catalogCachePath)
+        { 
+            string catalogContent = FileHelper.ReadAllText(remotePath);
+
+            string folderPath = Path.Combine(_rootPath, Path.GetFileNameWithoutExtension(catalogCachePath));
+            FileHelper.CreateDirectoryIfNotExists(folderPath);
+            
+            File.WriteAllText(Path.Combine(folderPath, "catalog.json"), catalogContent);
+            var catalogJson = JObject.Parse(catalogContent);
+            JArray jArray = catalogJson["m_InternalIdPrefixes"] as JArray;
+            if (jArray != null)
+            {
+                string catalogRootPath = remotePath.Replace(Path.GetFileName(remotePath), "");
+                if (catalogRootPath.EndsWith("/"))
+                    catalogRootPath = catalogRootPath.Substring(0, catalogRootPath.Length - 1);
+                if (catalogRootPath.EndsWith("\\"))
+                    catalogRootPath = catalogRootPath.Substring(0, catalogRootPath.Length - 1);
+                var catalogRootUri = new Uri(catalogRootPath);
+                for (int i = 0; i < jArray.Count; ++i)
+                {
+                    var entry = jArray[i] as JValue;
+                    if (entry == null)
+                        continue;
+                    string entryStr = entry.Value<string>();
+                    if (entryStr == null || !ResourceManagerConfig.IsPathRemote(entryStr))
+                        continue;
+
+                    int entryIndex = entryStr.IndexOf(catalogRootUri.AbsolutePath, StringComparison.InvariantCulture);
+                    if (entryIndex != -1)
+                    {
+                        string manipulateString = entryStr.Substring(entryIndex, entryStr.Length - entryIndex);
+                        manipulateString = manipulateString.Replace(catalogRootUri.AbsolutePath,
+                            $"file:///{_rootPath}/{Path.GetFileNameWithoutExtension(catalogCachePath)}");
+                        jArray[i] = JValue.CreateString(manipulateString);
+                    }
+
+                }
+            }
+            File.WriteAllText(catalogCachePath, catalogJson.ToString(Formatting.None));
+        }
+
+        /// <summary>
+        /// 
+        /// </summary>
+        /// <param name="extensionFilter">Include '.prefab', '.mat', etc.</param>
+        /// <returns></returns>
+        public static IReadOnlyCollection<string> GetLoadedResourceKeys(string extensionFilter = null)
+        {
+            if (_resourceLocators == null)
+                return Array.Empty<string>();
+
+            List<string> keys = new List<string>();
+            foreach (var resourceLocatorCache in _resourceLocators.Values)
+            {
+                var addressableCache = resourceLocatorCache.Locator;
+
+                foreach (var l in addressableCache.Keys)
+                {
+                    if (l is string s)
+                    {
+                        // Skip asset guids
+                        if (System.Guid.TryParse(s, out System.Guid g))
+                            continue;
+
+                        if (extensionFilter != null && !s.EndsWith(extensionFilter))
+                            continue;
+                        keys.Add(s);
+                    }
+                }
+            }
+
+            return keys;
+        }
+
+        public static void ClearCache()
+        {
+            UnityEngine.Caching.ClearCache();
+            foreach (var locator in _resourceLocators.Values)
+            {
+                locator.ClearCache();
+            }
+        }
+    }
+}

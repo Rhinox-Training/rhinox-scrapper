@@ -1,0 +1,29 @@
+{
+  "name": "com.rhinox.open.scrapper",
+  "displayName": "Rhinox.Scrapper",
+  "version": "0.1.0",
+  "unity": "2020.3",
+  "description": "Mirrored downloader for Addressables.",
+  "keywords": [
+    "unity",
+    "addressables"
+  ],
+  "category": "Unity",
+  "dependencies": {
+	"com.rhinox.open.lightspeed": "1.2.4",
+	"com.rhinox.open.guiutils": "1.5.1",
+	"com.rhinox.open.perceptor": "0.1.6",
+    "com.rhinox.open.utilities": "1.1.14",
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Rhinox-Training/rhinox-scrapper.git"
+  },
+  "author": "Rhinox",
+  "license": "Apache V.2",
+  "bugs": {
+    "url": "https://github.com/Rhinox-Training/rhinox-scrapper/issues"
+  },
+  "homepage": "https://github.com/Rhinox-Training/rhinox-scrapper#readme",
+  "type": "library"
+}
