@@ -134,7 +134,7 @@ namespace Rhinox.Scrapper
             
             string targetPath = Path.GetFullPath(Path.Combine(LocalPath, relativeFilePath));
             if (!FileHelper.Exists(targetPath))
-                return false;
+                return true;
 
             try
             {

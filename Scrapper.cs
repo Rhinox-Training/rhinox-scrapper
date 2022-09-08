@@ -37,6 +37,9 @@ namespace Rhinox.Scrapper
         public delegate void PreloadEventHandler(object[] keys);
         public static event PreloadEventHandler PreloadCompleted;
 
+        public delegate void ErrorEventHandler(string errorMessage, Exception e = null);
+        public static event ErrorEventHandler CustomErrorHandling;
+
         private enum InitializingState
         {
             None,
@@ -60,7 +63,9 @@ namespace Rhinox.Scrapper
             if (!initAction.IsValid())
             {
                 _initializingState = InitializingState.None;
-                PLog.Warn<ScrapperLogger>("Failed to initialize Scrapper, Addressable initialization failed...");
+                const string initFailMessage = "Failed to initialize Scrapper, Addressable initialization failed...";
+                PLog.Warn<ScrapperLogger>(initFailMessage);
+                CustomErrorHandling?.Invoke(initFailMessage);
                 yield break;
             }
 
@@ -72,7 +77,9 @@ namespace Rhinox.Scrapper
             if (!TryInitializeCacheFolder())
             {
                 _initializingState = InitializingState.None;
-                PLog.Warn<ScrapperLogger>("Failed to initialize Scrapper, cache folder could not be created/loaded...");
+                const string cacheFolderFailMsg = "Failed to initialize Scrapper, cache folder could not be created/loaded...";
+                PLog.Warn<ScrapperLogger>(cacheFolderFailMsg);
+                CustomErrorHandling?.Invoke(cacheFolderFailMsg);
                 yield break;
             }
             
@@ -109,20 +116,25 @@ namespace Rhinox.Scrapper
         {
             if (!remotePath.EndsWith(".json"))
             {
-                PLog.Debug<ScrapperLogger>($"Path not supported for catalog '{remotePath}', must end in .json");
+                string catalogPathErrMsg = $"Path not supported for catalog '{remotePath}', must end in .json";
+                PLog.Debug<ScrapperLogger>(catalogPathErrMsg);
+                CustomErrorHandling?.Invoke(catalogPathErrMsg);
                 yield break;
             }
 
             // Handle hash file
-            bool cacheUpdateRequired = false;
-            if (CheckAndUpdateLocalHash(remotePath, out bool catalogChanged))
+            if (!CheckAndUpdateLocalHash(remotePath, out bool catalogChanged))
             {
-                cacheUpdateRequired = true;
-                // Handle catalog
-                string catalogCachePath = AddressableUtility.GetCachePathForCatalog(remotePath, ".json");
-                if (!FileHelper.Exists(catalogCachePath) || catalogChanged)
-                    SetupCatalog(remotePath, catalogCachePath);
+                string catalogHashUpdateFailMsg = $"Could not check catalog hash at '{remotePath}', exiting...";
+                PLog.Debug<ScrapperLogger>(catalogHashUpdateFailMsg);
+                CustomErrorHandling?.Invoke(catalogHashUpdateFailMsg);
+                yield break;
             }
+            
+            // Handle catalog
+            string catalogCachePath = AddressableUtility.GetCachePathForCatalog(remotePath, ".json");
+            if (!FileHelper.Exists(catalogCachePath) || catalogChanged)
+                SetupCatalog(remotePath, catalogCachePath);
 
             // Load cached catalog in Addressable system
             PLog.Debug<ScrapperLogger>($"{nameof(LoadCatalogAsync)} load content catalog at {remotePath}...");
@@ -131,7 +143,9 @@ namespace Rhinox.Scrapper
 
             if (catalogResult.Status != AsyncOperationStatus.Succeeded)
             {
-                PLog.Error<ScrapperLogger>($"Load Content Catalog failed");
+                const string addressableLoadFailMsg = "Load Content Catalog failed, Addressable Failure";
+                PLog.Error<ScrapperLogger>(addressableLoadFailMsg);
+                CustomErrorHandling?.Invoke(addressableLoadFailMsg);
                 yield break;
             }
 
@@ -142,7 +156,9 @@ namespace Rhinox.Scrapper
 
             if (_resourceLocators.ContainsKey(resourceLocator.LocatorId))
             {
-                PLog.Warn<ScrapperLogger>($"ResourceLocator with id '{resourceLocator.LocatorId}' already registered, exiting...");
+                string resourceLocatorExistsMsg = $"ResourceLocator with id '{resourceLocator.LocatorId}' already registered, exiting...";
+                PLog.Warn<ScrapperLogger>(resourceLocatorExistsMsg);
+                CustomErrorHandling?.Invoke(resourceLocatorExistsMsg);
                 yield break;
             }
             
@@ -151,7 +167,8 @@ namespace Rhinox.Scrapper
             var localCachePath = Path.GetFullPath(Path.Combine(_rootPath, AddressableUtility.GetCatalogHashName(remotePath)));
             var remoteDataPath = remotePath.Replace(Path.GetFileName(remotePath), "");
             var mirrorCache = new MirroredResourceCatalog(resourceLocator, new MirrorDownloader(remoteDataPath, localCachePath));
-            if (cacheUpdateRequired)
+            mirrorCache.Initialize();
+            if (catalogChanged)
                 mirrorCache.ClearCache(); // Create new mirrorCache
             _resourceLocators.Add(resourceLocator.LocatorId, mirrorCache);
             
@@ -171,14 +188,36 @@ namespace Rhinox.Scrapper
             foreach (var loaderKey in _resourceLocators.Keys)
             {
                 var locator = _resourceLocators[loaderKey];
-                var preloadEnumerator = locator.PreloadAllAssetsAsync(keys);
-                yield return preloadEnumerator.Current;
-                while (preloadEnumerator.MoveNext())
+                IEnumerator preloadEnumerator = null;
+                try
                 {
+                    preloadEnumerator = locator.PreloadAllAssetsAsync(keys);
+                }
+                catch (Exception e)
+                {
+                    CustomErrorHandling?.Invoke($"Preload failure: {e.ToString()}", e);
+                    yield break;
+                }
+
+                yield return preloadEnumerator.Current;
+                bool repeat = false;
+                do
+                {
+                    try
+                    {
+                        repeat = preloadEnumerator.MoveNext();
+                    }
+                    catch (Exception e)
+                    {
+                        CustomErrorHandling?.Invoke($"Preload failure: {e.ToString()}", e);
+                        yield break;
+                    }
+
                     var progress = preloadEnumerator.Current is float ? (float) preloadEnumerator.Current : 0.0f;
                     progressHandler?.Invoke(progress);
                     yield return null;
-                }
+                } 
+                while (repeat);
 
                 yield return null;
             }
@@ -187,11 +226,12 @@ namespace Rhinox.Scrapper
             PreloadCompleted?.Invoke(keys);
         }
         
-        public static IEnumerator LoadAssetAsync<T>(string key, Action<T> onCompleted, T fallbackObject = default(T))
+        public static IEnumerator LoadAssetAsync<T>(string key, Action<T> onCompleted, T fallbackObject = default(T), Action onFailed = null)
         {
             if (!Initialized)
             {
                 PLog.Warn<ScrapperLogger>($"Scrapper not initialized, skipping...");
+                onFailed?.Invoke();
                 yield break;
             }
 
@@ -200,15 +240,20 @@ namespace Rhinox.Scrapper
             {
                 var loadAsset = Addressables.LoadAssetAsync<T>(key);
                 yield return loadAsset;
-                
-                if(loadAsset.Status != AsyncOperationStatus.Succeeded)
+
+                if (loadAsset.Status != AsyncOperationStatus.Succeeded)
+                {
                     PLog.Error($"Load of resource with key: '{key}' failed: {loadAsset.Status}");
+                    onFailed?.Invoke();
+                }
+
                 loadedAsset = loadAsset.Result;
             }
             else
             {
                 PLog.Warn($"Asset with key: '{key}' is missing, setting {fallbackObject} as replacement (loaded catalog: {_resourceLocators.Count})");
                 loadedAsset = fallbackObject;
+                onFailed?.Invoke();
             }
 
             PLog.Info($"Loaded '{loadedAsset}' of type '{loadedAsset?.GetType().Name ?? "None"}' from path {key}");
@@ -239,7 +284,18 @@ namespace Rhinox.Scrapper
             bool localHashMatchesRemote = false;
             string hashCachePath = AddressableUtility.GetCachePathForCatalog(remotePath);
             string remoteHashPath = remotePath.Replace(".json", ".hash");
-            string remoteHash = FileHelper.ReadAllText(remoteHashPath);
+            string remoteHash = null;
+            try
+            {
+                remoteHash = FileHelper.ReadAllText(remoteHashPath);
+            }
+            catch (Exception e)
+            {
+                PLog.Error<ScrapperLogger>($"Exception occured while downloading catalog hash file from server: {e.ToString()}");
+                hashChanged = false;
+                return false;
+            }
+
             if (remoteHash == null)
             {
                 PLog.Debug<ScrapperLogger>($"Failed to fetch text from '{remoteHashPath}'");
@@ -247,19 +303,34 @@ namespace Rhinox.Scrapper
                 return false;
             }
 
-            if (!FileHelper.Exists(hashCachePath))
+            try
             {
-                var directory = Path.GetDirectoryName(hashCachePath);
-                FileHelper.CreateDirectoryIfNotExists(directory);
-                File.WriteAllText(hashCachePath, remoteHash);
-            }
-            else
-            {
-                string localHash = FileHelper.ReadAllText(hashCachePath);
-                if (localHash != null && localHash.Equals(remoteHash))
-                    localHashMatchesRemote = true;
-                else
+                if (!FileHelper.Exists(hashCachePath))
+                {
+                    var directory = Path.GetDirectoryName(hashCachePath);
+                    FileHelper.CreateDirectoryIfNotExists(directory);
                     File.WriteAllText(hashCachePath, remoteHash);
+                }
+                else
+                {
+                    string localHash = FileHelper.ReadAllText(hashCachePath);
+                    if (localHash != null && localHash.Equals(remoteHash))
+                        localHashMatchesRemote = true;
+                    else
+                        File.WriteAllText(hashCachePath, remoteHash);
+                }
+            }
+            catch (IOException exception)
+            {
+                PLog.Error<ScrapperLogger>($"File IO problem occured with local catalog hash file: {exception.ToString()}");
+                hashChanged = false;
+                return false;
+            }
+            catch (Exception e)
+            {
+                PLog.Error<ScrapperLogger>($"Exception occured while checking local catalog hash file: {e.ToString()}");
+                hashChanged = false;
+                return false;
             }
 
             hashChanged = !localHashMatchesRemote;

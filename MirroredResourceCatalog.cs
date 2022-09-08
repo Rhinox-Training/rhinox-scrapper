@@ -41,6 +41,11 @@ namespace Rhinox.Scrapper
             _catalogHash = AddressableUtility.GetCatalogHashName(locator.LocatorId);
         }
         
+        public void Initialize()
+        {
+            // TODO: setup bundle cache in _bundleMirror
+            _bundleMirror.InitializeBundleInfo();
+        }
         
         public IEnumerator LoadAsset<T>(object key, Action<T> onCompleted, Action<object> onFailed = null, T fallbackObject = default(T))
         {
@@ -115,10 +120,6 @@ namespace Rhinox.Scrapper
 
         public void ClearCache()
         {
-            // TODO: delete cache of project
-            // TODO: delete guid files in AppData
-            
-            
             _bundleMirror.ClearCache();
         }
     }
