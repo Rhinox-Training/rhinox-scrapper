@@ -21,13 +21,29 @@ namespace Rhinox.Scrapper
         public string Hash;
         public string RemoteBundleSubpath;
         public IResourceLocation Location;
+        public bool IsCached { get; private set; } 
+
+        public void MarkCached(bool state)
+        {
+            if (IsCached == state)
+                return;
+            IsCached = state;
+        }
     }
     
     public class AssetBundleMirror
     {
+        private struct AssetBundleLocation
+        {
+            public IResourceLocation Location;
+            public AssetBundleRequestOptions Request;
+        }
+        
         private Dictionary<string, AssetBundleInformation> _bundleInfoByBundleName;
         private readonly IResourceLocator _locator;
         private readonly MirrorDownloader _downloader;
+        private bool _initialized;
+        public bool Initialized => _initialized;
 
         public IReadOnlyCollection<AssetBundleInformation> CachedBundles => _bundleInfoByBundleName != null
             ? (IReadOnlyCollection<AssetBundleInformation>) _bundleInfoByBundleName.Values
@@ -39,6 +55,41 @@ namespace Rhinox.Scrapper
             _downloader = downloader;
 
             _bundleInfoByBundleName = new Dictionary<string, AssetBundleInformation>();
+        }
+        
+        public void InitializeBundleInfo()
+        {
+            if (_initialized)
+                return;
+            
+            _bundleInfoByBundleName.Clear();
+            
+            foreach (var bundle in FindAllAssetBundles())
+            {
+                if (_bundleInfoByBundleName.ContainsKey(bundle.Request.BundleName))
+                {
+                    PLog.Trace<ScrapperLogger>($"Already cached bundle with name '{bundle.Request.BundleName}', skipping...");
+                    continue;
+                }
+                
+                // Create entry
+                var info = Create(bundle);
+                _bundleInfoByBundleName.Add(info.BundleName, info);
+            }
+
+            _initialized = true;
+        }
+
+        private static AssetBundleInformation Create(AssetBundleLocation bundle)
+        {
+            var info = new AssetBundleInformation()
+            {
+                Location = bundle.Location,
+                BundleName = bundle.Request.BundleName,
+                Hash = bundle.Request.Hash,
+                RemoteBundleSubpath = bundle.Location.PrimaryKey.Replace($"_{bundle.Request.Hash}", "")
+            };
+            return info;
         }
 
         public bool HasCachedBundle(string bundleName)
@@ -65,78 +116,51 @@ namespace Rhinox.Scrapper
             if (!_downloader.ClearTargetAsset(info.RemoteBundleSubpath))
                 return false;
 
-            _bundleInfoByBundleName.Remove(bundleName);
+            info.MarkCached(false);
             return true;
         }
 
         public IEnumerator<float> TryLoadBundlesFor(object key)
         {
-            if (!_locator.Locate(key, typeof(object), out var locations)) 
-                yield break;
-            
-            var resourceLocations = new Queue<IResourceLocation>();
-            var infos = new List<AssetBundleInformation>();
-                
-            foreach (var location in locations)
-                resourceLocations.Enqueue(location);
-            yield return 0.0f;
-            int count = 0;
-            while (resourceLocations.Count > 0)
+            var bundles = FindAssetBundlesFor(key).ToArray();
+            int bundleCountForProgress =  Math.Max((bundles.Length - 1), 1);
+            for (int i = 0; i < bundles.Length; ++i)
             {
-                var location = resourceLocations.Dequeue();
-                if (location.Data != null && location.Data is AssetBundleRequestOptions request)
+                var bundle = bundles[i];
+                if (!_bundleInfoByBundleName.ContainsKey(bundle.Request.BundleName))
                 {
-                    ++count;
-                    var info = new AssetBundleInformation()
-                    {
-                        Location = location,
-                        BundleName = request.BundleName,
-                        Hash = request.Hash,
-                        RemoteBundleSubpath = location.PrimaryKey.Replace($"_{request.Hash}", "")
-                    };
-                    infos.Add(info);
-
-                    // TODO: Hack for loading progress
-                    var type = typeof(ContentCatalogData).GetNestedType("CompactLocation", BindingFlags.Instance | BindingFlags.Static | BindingFlags.NonPublic);
-                    if (type != null)
-                    {
-                        var dataField = type.GetField("m_Data", BindingFlags.Instance | BindingFlags.NonPublic);
-                        if (dataField != null && type.IsInstanceOfType(location))
-                        {
-                            var virt = AddressableUtility.MakeVirtual(request);
-                            dataField.SetValue(location, virt);
-                        }
-                    }
-
-                    float progress = (float) count / Math.Max((locations.Count - 1), 1);
-                    yield return Mathf.Min(0.05f + progress * 0.4f, 0.5f);
+                    PLog.Warn<ScrapperLogger>($"Bundle info missing for bundle? Creating anyway");
+                    var info = Create(bundle);
+                    _bundleInfoByBundleName.Add(info.BundleName, info);
                 }
 
-                if (location.HasDependencies)
-                {
-                    foreach (var dep in location.Dependencies)
-                        resourceLocations.Enqueue(dep);
-                }
+                var bundleInfo = _bundleInfoByBundleName[bundle.Request.BundleName];
+                AddressableUtility.FixupMirrorProgress(ref bundleInfo.Location);
+
+                float progress = (float) i / bundleCountForProgress;
+                yield return Mathf.Min(0.05f + progress * 0.4f, 0.5f);
             }
 
-            for (int i = 0; i < infos.Count; ++i)
+            for (int i = 0; i < bundles.Length; ++i)
             {
-                var info = infos[i];
-                if (_bundleInfoByBundleName.ContainsKey(info.BundleName))
+                var bundle = bundles[i];
+                var info = _bundleInfoByBundleName[bundle.Request.BundleName];
+                
+                if (info.IsCached)
                 {
-                    PLog.Trace<ScrapperLogger>(
-                        $"Already downloaded bundle with name '{info.BundleName}', skipping...");
+                    PLog.Trace<ScrapperLogger>($"Already downloaded bundle with name '{info.BundleName}', skipping...");
                     continue;
                 }
-                float chunkSize = 1.0f / Math.Max((infos.Count - 1), 1);
-                float progress = (float) i / Math.Max((infos.Count - 1), 1);
+
+                float chunkSize = 1.0f / bundleCountForProgress;
+                float progress = (float) i / bundleCountForProgress;
 
                 var downloadHandler = _downloader.DownloadAssetAsync(info.RemoteBundleSubpath, 180);
                 yield return 0.5f + ((progress + (downloadHandler.Current * chunkSize)) * 0.5f);
                 while (downloadHandler.MoveNext())
                     yield return 0.5f + ((progress + (downloadHandler.Current * chunkSize)) * 0.5f);
-                
-                _bundleInfoByBundleName.Add(info.BundleName, info);
+
+                info.MarkCached(true);
             }
 
             yield return 1.0f;
@@ -162,7 +186,57 @@ namespace Rhinox.Scrapper
                 if (!_downloader.ClearTargetAsset(info.RemoteBundleSubpath))
                     PLog.Error<ScrapperLogger>($"Failed to clear '{info.RemoteBundleSubpath}' at {_downloader.LocalPath}");
                 else
-                    _bundleInfoByBundleName.Remove(info.BundleName);
+                {
+                    info.MarkCached(false);
+                }
+            }
+        }
+        
+        
+        // =============================================================================================================
+        // Helpers
+        private IEnumerable<AssetBundleLocation> FindAllAssetBundles()
+        {
+            foreach (var key in _locator.Keys)
+            {
+                if (key is string strKey)
+                {
+                    // Skip asset guids
+                    if (!System.Guid.TryParse(strKey, out System.Guid g))
+                        continue;
+
+                    foreach (var assetBundle in FindAssetBundlesFor(strKey))
+                        yield return assetBundle;
+                }
+            }
+        }
+
+        private IEnumerable<AssetBundleLocation> FindAssetBundlesFor(object key)
+        {
+            if (!_locator.Locate(key, typeof(object), out var locations))
+                yield break;
+
+            var resourceLocations = new Queue<IResourceLocation>();
+            foreach (var location in locations)
+                resourceLocations.Enqueue(location);
+            
+            while (resourceLocations.Count > 0)
+            {
+                var location = resourceLocations.Dequeue();
+                if (location.Data != null && location.Data is AssetBundleRequestOptions request)
+                {
+                    yield return new AssetBundleLocation()
+                    {
+                        Location = location,
+                        Request = request
+                    };
+                }
+
+                if (location.HasDependencies)
+                {
+                    foreach (var dep in location.Dependencies)
+                        resourceLocations.Enqueue(dep);
+                }
             }
         }
     }

@@ -14,6 +14,7 @@ using UnityEngine.ResourceManagement.ResourceLocations;
 using UnityEngine.ResourceManagement.ResourceProviders;
 using UnityEngine.ResourceManagement.ResourceProviders.Simulation;
 using UnityEngine.ResourceManagement.Util;
+using UnityEngineInternal;
 
 namespace Rhinox.Scrapper
 {
@@ -237,8 +238,51 @@ namespace Rhinox.Scrapper
             return false;
         }
 
+        
+        // NOTE: Hack for loading progress
+        private static Type _compactLocationType;
+        private static FieldInfo _locationDataField;
 
-        public static AssetBundleRequestOptions MakeVirtual(AssetBundleRequestOptions requestOptions)
+        private static bool TryInitializeProgressHelperTypes()
+        {
+            if (_compactLocationType == null)
+            {
+                _compactLocationType = typeof(ContentCatalogData).GetNestedType("CompactLocation",
+                    BindingFlags.Instance | BindingFlags.Static | BindingFlags.NonPublic);
+                
+                if (_compactLocationType != null)
+                    _locationDataField = _compactLocationType.GetField("m_Data", BindingFlags.Instance | BindingFlags.NonPublic);
+            }
+
+            return _compactLocationType != null && _locationDataField != null;
+        }
+        
+        public static bool FixupMirrorProgress(ref IResourceLocation location)
+        {
+            if (location == null)
+                return false;
+
+            if (location.Data is VirtualLocalBundleRequestOptions ||
+                !(location.Data is AssetBundleRequestOptions bundleRequestOptions)) // Already fixed
+                return false;
+
+            if (!TryInitializeProgressHelperTypes())
+            {
+                PLog.Warn<ScrapperLogger>($"Can't find type information to fix mirror progress");
+                return false;
+            }
+           
+            if (_compactLocationType.IsInstanceOfType(location))
+            {
+                var virt = AddressableUtility.MakeVirtual(bundleRequestOptions);
+                _locationDataField.SetValue(location, virt);
+                return true;
+            }
+
+            return false;
+        }
+        
+        private static AssetBundleRequestOptions MakeVirtual(AssetBundleRequestOptions requestOptions)
         {
             var virtualOptions = new VirtualLocalBundleRequestOptions()
             {

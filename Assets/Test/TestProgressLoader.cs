@@ -18,7 +18,22 @@ namespace Rhinox.Scrapper.Test
 
         public TMP_Text Text;
         public Slider Slider;
-        
+
+        private void OnEnable()
+        {
+            Scrapper.CustomErrorHandling += OnError;
+        }
+
+        private void OnDisable()
+        {
+            Scrapper.CustomErrorHandling -= OnError;
+        }
+
+        private void OnError(string errormessage, Exception e)
+        {
+            Debug.LogError(errormessage);
+        }
+
         private void Start()
         {
             if (string.IsNullOrWhiteSpace(RemoteCatalogURL))
@@ -26,7 +41,7 @@ namespace Rhinox.Scrapper.Test
                 EnvironmentLoader.Load(Path.Combine(FileHelper.GetProjectPath(), ".env"));
                 RemoteCatalogURL = EnvironmentLoader.AddressableCatalogUrl;
             }
-            
+
             PLog.Debug("Start event on GameObject called, InitAddressableStart");
             var managedCoroutine = new ManagedCoroutine(Scrapper.InitializeAsync());
             managedCoroutine.OnFinished += OnFinished;
