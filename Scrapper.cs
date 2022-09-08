@@ -249,6 +249,8 @@ namespace Rhinox.Scrapper
 
             if (!FileHelper.Exists(hashCachePath))
             {
+                var directory = Path.GetDirectoryName(hashCachePath);
+                FileHelper.CreateDirectoryIfNotExists(directory);
                 File.WriteAllText(hashCachePath, remoteHash);
             }
             else
