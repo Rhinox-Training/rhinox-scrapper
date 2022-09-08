@@ -55,7 +55,7 @@ namespace Rhinox.Scrapper
             return true;
         }
         
-        public IEnumerator<float> DownloadAssetAsync(string relativeFilePath, int timeout, bool overwrite = false)
+        public IEnumerator<float> DownloadAssetAsync(string relativeFilePath, int timeout, int retryCount = 3, bool overwrite = false)
         {
             if (_downloadHandler != null)
             {
@@ -78,11 +78,26 @@ namespace Rhinox.Scrapper
                 yield break;
             }
 
-            var enumerator = ExecuteWebRequest(path, timeout, (x) => { _downloadHandler = x; }, () => _downloadHandler = null);
-            yield return enumerator.Current;
-            while (enumerator.MoveNext())
+            int tryCount = 0;
+            do
+            {
+                var enumerator = ExecuteWebRequest(path, timeout, (x) => { _downloadHandler = x; },
+                    () => _downloadHandler = null);
                 yield return enumerator.Current;
-            
+                while (enumerator.MoveNext())
+                    yield return enumerator.Current;
+
+                if (_downloadHandler == null)
+                    tryCount++;
+                
+            } while (tryCount < retryCount && _downloadHandler == null);
+
+            if (_downloadHandler == null)
+            {
+                PLog.Error<ScrapperLogger>($"Download still failed after {retryCount} retries, can't download resource '{relativeFilePath}'...");
+                yield break;
+            }
+
             var bytes = _downloadHandler.data;
             _downloadHandler = null;
             if (bytes.Length == 0)
@@ -117,7 +132,9 @@ namespace Rhinox.Scrapper
                 yield return www.downloadProgress;
             }
             
-            if (www.isNetworkError || www.isHttpError)
+            if (www.result == UnityWebRequest.Result.ConnectionError || 
+                www.result == UnityWebRequest.Result.ProtocolError ||
+                www.result == UnityWebRequest.Result.DataProcessingError)
             {
                 PLog.Error<ScrapperLogger>($"Network error: {path} - {www.error}");
                 onFailed?.Invoke();
