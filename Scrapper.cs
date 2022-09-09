@@ -142,7 +142,10 @@ namespace Rhinox.Scrapper
             string catalogCachePath = AddressableUtility.GetCachePathForCatalog(remotePath, ".json");
             string catalogMorphedPath = Path.Combine(_rootPath, Path.GetFileNameWithoutExtension(catalogCachePath), "catalog.json");
             if (catalogChanged || !FileHelper.Exists(catalogCachePath) || !FileHelper.Exists(catalogMorphedPath))
+            {
                 SetupCatalog(remotePath, catalogCachePath);
+                catalogChanged = true; // Force clear setup, if first time running this
+            }
 
             // Load cached catalog in Addressable system
             PLog.Debug<ScrapperLogger>($"{nameof(LoadCatalogAsync)} load content catalog at {remotePath}...");
