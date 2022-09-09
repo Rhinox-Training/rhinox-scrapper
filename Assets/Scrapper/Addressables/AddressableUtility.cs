@@ -226,13 +226,16 @@ namespace Rhinox.Scrapper
             }
             
             var idKeyType = resourcesAssembly.GetType("UnityEngine.ResourceManagement.Util.IdCacheKey", false);
-            var idField = idKeyType.GetField("ID",
-                BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
-            if (idKeyType.IsInstanceOfType(operationCacheKey) && idField != null)
+            if (idKeyType != null) // Addressables 1.20.x or higher
             {
-                string id = Addressables.ResourceManager.TransformInternalId(location);
-                var savedLoc = idField.GetValue(operationCacheKey) as string;
-                return savedLoc == id;
+                var idField = idKeyType.GetField("ID",
+                    BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+                if (idKeyType.IsInstanceOfType(operationCacheKey) && idField != null)
+                {
+                    string id = Addressables.ResourceManager.TransformInternalId(location);
+                    var savedLoc = idField.GetValue(operationCacheKey) as string;
+                    return savedLoc == id;
+                }
             }
 
             return false;
