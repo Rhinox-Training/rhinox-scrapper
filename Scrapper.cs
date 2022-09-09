@@ -35,10 +35,10 @@ namespace Rhinox.Scrapper
         public static event CatalogLoadEventHandler CatalogLoaded;
         
         
-        public delegate void PreloadProgressEventHandler(object[] keys, float progress);
+        public delegate void PreloadProgressEventHandler(object[] keys, ProgressBytes progress);
         public static event PreloadProgressEventHandler PreloadProgressCallback;
 
-        public delegate void PreloadEventHandler(object[] keys);
+        public delegate void PreloadEventHandler(object[] keys, long totalBytes);
         public static event PreloadEventHandler PreloadCompleted;
         
         public delegate void PreloadErrorEventHandler(object[] keys, string errorMsg);
@@ -192,10 +192,11 @@ namespace Rhinox.Scrapper
 
         public static IEnumerator PreloadAsync(Action<float> progressHandler, params object[] keys)
         {
+            long totalBytes = 0;
             foreach (var loaderKey in _resourceLocators.Keys)
             {
                 var locator = _resourceLocators[loaderKey];
-                IEnumerator preloadEnumerator = null;
+                IEnumerator<ProgressBytes> preloadEnumerator = null;
                 try
                 {
                     preloadEnumerator = locator.PreloadAllAssetsAsync(keys);
@@ -207,7 +208,9 @@ namespace Rhinox.Scrapper
                     yield break;
                 }
 
-                yield return preloadEnumerator.Current;
+                ProgressBytes currentProgress = preloadEnumerator.Current;
+                yield return currentProgress;
+                PreloadProgressCallback?.Invoke(keys, currentProgress);
                 bool repeat = false;
                 do
                 {
@@ -222,18 +225,19 @@ namespace Rhinox.Scrapper
                         yield break;
                     }
 
-                    var progress = preloadEnumerator.Current is float ? (float) preloadEnumerator.Current : 0.0f;
-                    progressHandler?.Invoke(progress);
-                    PreloadProgressCallback?.Invoke(keys, progress);
+                    currentProgress = preloadEnumerator.Current;
+                    progressHandler?.Invoke(currentProgress.Progress);
+                    PreloadProgressCallback?.Invoke(keys, currentProgress);
                     yield return null;
                 } 
                 while (repeat);
 
+                totalBytes += currentProgress.TotalBytes;
                 yield return null;
             }
 
             PLog.Debug<ScrapperLogger>($"PreloadAsync finished for {string.Join(", ", keys)}");
-            PreloadCompleted?.Invoke(keys);
+            PreloadCompleted?.Invoke(keys, totalBytes);
         }
         
         public static IEnumerator LoadAssetAsync<T>(string key, Action<T> onCompleted, T fallbackObject = default(T), Action onFailed = null)
