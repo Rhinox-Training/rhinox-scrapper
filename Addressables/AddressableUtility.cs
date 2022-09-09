@@ -222,7 +222,18 @@ namespace Rhinox.Scrapper
             if (locationKeyType.IsInstanceOfType(operationCacheKey) && locationField != null)
             {
                 var savedLoc = locationField.GetValue(operationCacheKey) as IResourceLocation;
-                return savedLoc == location;
+                if (savedLoc == location)
+                    return true;
+                if (savedLoc != null)
+                {
+                    if (savedLoc.Data is AssetBundleRequestOptions savedRequest &&
+                        location.Data is AssetBundleRequestOptions locationOptions)
+                    {
+                        return savedRequest.BundleName == locationOptions.BundleName &&
+                               savedRequest.Hash == locationOptions.Hash;
+                    }
+                    return savedLoc.Equals(location);
+                }
             }
             
             var idKeyType = resourcesAssembly.GetType("UnityEngine.ResourceManagement.Util.IdCacheKey", false);
