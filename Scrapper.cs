@@ -33,9 +33,16 @@ namespace Rhinox.Scrapper
 
         public delegate void CatalogLoadEventHandler(string catalogLocatorId);
         public static event CatalogLoadEventHandler CatalogLoaded;
+        
+        
+        public delegate void PreloadProgressEventHandler(object[] keys, float progress);
+        public static event PreloadProgressEventHandler PreloadProgressCallback;
 
         public delegate void PreloadEventHandler(object[] keys);
         public static event PreloadEventHandler PreloadCompleted;
+        
+        public delegate void PreloadErrorEventHandler(object[] keys, string errorMsg);
+        public static event PreloadErrorEventHandler PreloadFailed;
 
         public delegate void ErrorEventHandler(string errorMessage, Exception e = null);
         public static event ErrorEventHandler CustomErrorHandling;
@@ -196,6 +203,7 @@ namespace Rhinox.Scrapper
                 catch (Exception e)
                 {
                     CustomErrorHandling?.Invoke($"Preload failure: {e.ToString()}", e);
+                    PreloadFailed?.Invoke(keys, $"Preload failure: {e.ToString()}");
                     yield break;
                 }
 
@@ -210,11 +218,13 @@ namespace Rhinox.Scrapper
                     catch (Exception e)
                     {
                         CustomErrorHandling?.Invoke($"Preload failure: {e.ToString()}", e);
+                        PreloadFailed?.Invoke(keys, $"Preload failure: {e.ToString()}");
                         yield break;
                     }
 
                     var progress = preloadEnumerator.Current is float ? (float) preloadEnumerator.Current : 0.0f;
                     progressHandler?.Invoke(progress);
+                    PreloadProgressCallback?.Invoke(keys, progress);
                     yield return null;
                 } 
                 while (repeat);
