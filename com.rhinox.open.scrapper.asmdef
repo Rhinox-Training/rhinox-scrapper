@@ -1,0 +1,23 @@
+{
+    "name": "com.rhinox.open.scrapper",
+    "rootNamespace": "",
+    "references": [
+        "GUID:3b169ccda512e504b9e2eb8b0bec14f9",
+        "GUID:62a965aa53b0d0e4a9715c9a86d7fd31",
+        "GUID:fc025ba4ac3997440926e87ec084af89",
+        "GUID:9638b1d2b0f59054589665a7d070b551",
+        "GUID:cacc866837634ee43b789e23dc71d920",
+        "GUID:9e24947de15b9834991c9d8411ea37cf",
+        "GUID:84651a3751eca9349aac36a66bba901b",
+        "GUID:d06f234cedf03a546807d093bc1d736b"
+    ],
+    "includePlatforms": [],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": true,
+    "defineConstraints": [],
+    "versionDefines": [],
+    "noEngineReferences": false
+}
