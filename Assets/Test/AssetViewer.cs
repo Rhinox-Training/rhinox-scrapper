@@ -42,7 +42,7 @@ namespace RMDY
             Scrapper.PreloadCompleted -= OnPreloadCompleted;
         }
 
-        private void OnPreloadCompleted(object[] keys)
+        private void OnPreloadCompleted(object[] keys, long totalBytes)
         {
             if (enabled)
                 Initialize();

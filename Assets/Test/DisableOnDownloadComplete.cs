@@ -16,7 +16,7 @@ namespace Test
             Scrapper.PreloadCompleted -= OnDownloadComplete;
         }
 
-        private void OnDownloadComplete(object[] keys)
+        private void OnDownloadComplete(object[] keys, long totalBytes)
         {
             gameObject.SetActive(false);
         }

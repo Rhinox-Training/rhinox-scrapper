@@ -120,6 +120,15 @@ namespace Rhinox.Scrapper
             return true;
         }
 
+        public long GetByteSizeFor(object key)
+        {
+            var bundles = FindAssetBundlesFor(key).ToArray();
+            long byteSize = 0;
+            foreach (var bundle in bundles)
+                byteSize += bundle.Request.BundleSize;
+            return byteSize;
+        }
+
         public IEnumerator<float> TryLoadBundlesFor(object key)
         {
             var bundles = FindAssetBundlesFor(key).ToArray();
