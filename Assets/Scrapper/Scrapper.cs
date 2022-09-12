@@ -388,6 +388,8 @@ namespace Rhinox.Scrapper
                         string manipulateString = entryStr.Substring(entryIndex, entryStr.Length - entryIndex);
                         manipulateString = manipulateString.Replace(catalogRootUri.AbsolutePath,
                             $"file:///{_rootPath}/{Path.GetFileNameWithoutExtension(catalogCachePath)}");
+                        if (manipulateString.StartsWith("file:////"))
+                            manipulateString = manipulateString.Replace("file:////", "file:///");
                         jArray[i] = JValue.CreateString(manipulateString);
                     }
 

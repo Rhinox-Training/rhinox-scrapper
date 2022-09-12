@@ -1,7 +1,7 @@
 {
   "name": "com.rhinox.open.scrapper",
   "displayName": "Rhinox.Scrapper",
-  "version": "0.2.4",
+  "version": "0.2.5",
   "unity": "2020.3",
   "description": "Mirrored downloader for Addressables.",
   "keywords": [
