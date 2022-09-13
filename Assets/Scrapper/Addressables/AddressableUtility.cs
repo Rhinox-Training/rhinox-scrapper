@@ -12,7 +12,6 @@ using UnityEngine.ResourceManagement;
 using UnityEngine.ResourceManagement.AsyncOperations;
 using UnityEngine.ResourceManagement.ResourceLocations;
 using UnityEngine.ResourceManagement.ResourceProviders;
-using UnityEngine.ResourceManagement.ResourceProviders.Simulation;
 using UnityEngine.ResourceManagement.Util;
 using UnityEngineInternal;
 
