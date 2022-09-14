@@ -48,6 +48,7 @@ namespace Rhinox.Scrapper
         }
         
         public IEnumerator LoadAsset<T>(object key, Action<T> onCompleted, Action<object> onFailed = null, T fallbackObject = default(T))
+            where T : class
         {
             yield return _bundleMirror.TryLoadBundlesFor(key);
             
@@ -70,7 +71,8 @@ namespace Rhinox.Scrapper
             PLog.Info<ScrapperLogger>($"Loaded '{loadedAsset}' of type '{loadedAsset?.GetType().Name ?? "None"}' from path {key}");
             onCompleted?.Invoke(loadedAsset);
 
-            Addressables.Release(loadedAsset);
+            if (loadedAsset != fallbackObject)
+                Addressables.Release(loadedAsset);
         }
         
         
