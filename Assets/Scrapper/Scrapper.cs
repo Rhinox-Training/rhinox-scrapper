@@ -245,6 +245,7 @@ namespace Rhinox.Scrapper
         }
         
         public static IEnumerator LoadAssetAsync<T>(string key, Action<T> onCompleted, T fallbackObject = default(T), Action onFailed = null)
+            where T : class
         {
             if (!Initialized)
             {
@@ -277,7 +278,8 @@ namespace Rhinox.Scrapper
             PLog.Info($"Loaded '{loadedAsset}' of type '{loadedAsset?.GetType().Name ?? "None"}' from path {key}");
             onCompleted?.Invoke(loadedAsset);
 
-            Addressables.Release(loadedAsset);
+            if (loadedAsset != null && loadedAsset != fallbackObject)
+                Addressables.Release(loadedAsset);
             
             yield return null;
         }
