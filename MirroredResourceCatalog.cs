@@ -71,7 +71,7 @@ namespace Rhinox.Scrapper
             PLog.Info<ScrapperLogger>($"Loaded '{loadedAsset}' of type '{loadedAsset?.GetType().Name ?? "None"}' from path {key}");
             onCompleted?.Invoke(loadedAsset);
 
-            if (loadedAsset != fallbackObject)
+            if (loadedAsset != null && loadedAsset != fallbackObject)
                 Addressables.Release(loadedAsset);
         }
         
