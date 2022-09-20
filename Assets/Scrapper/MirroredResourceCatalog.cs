@@ -76,7 +76,7 @@ namespace Rhinox.Scrapper
         }
         
         
-        private bool AddressableResourceExists<T>(object key)
+        public bool AddressableResourceExists<T>(object key)
         {
             foreach (var l in Addressables.ResourceLocators)
             {
