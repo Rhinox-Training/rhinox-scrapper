@@ -254,34 +254,56 @@ namespace Rhinox.Scrapper
                 yield break;
             }
 
-            T loadedAsset = default(T);
-            if (HasResourceOfType<T>(key))
+            foreach (var loaderKey in _resourceLocators.Keys)
             {
-                var loadAsset = Addressables.LoadAssetAsync<T>(key);
-                yield return loadAsset;
+                var locator = _resourceLocators[loaderKey];
+                if (!locator.AddressableResourceExists<T>(key))
+                    continue;
 
-                if (loadAsset.Status != AsyncOperationStatus.Succeeded)
+                IEnumerator loadOp = null;
+
+                try
                 {
-                    PLog.Error($"Load of resource with key: '{key}' failed: {loadAsset.Status}");
+                    loadOp = locator.LoadAsset<T>(key,
+                        onCompleted,
+                        (fail) => { onFailed?.Invoke(); },
+                        fallbackObject);
+                }
+                catch (Exception e)
+                {
+                    PLog.Error<ScrapperLogger>($"Exception on load asset '{key}' from {locator}: {e.ToString()}");
                     onFailed?.Invoke();
                 }
 
-                loadedAsset = loadAsset.Result;
-            }
-            else
-            {
-                PLog.Warn($"Asset with key: '{key}' is missing, setting {fallbackObject} as replacement (loaded catalog: {_resourceLocators.Count})");
-                loadedAsset = fallbackObject;
-                onFailed?.Invoke();
-            }
+                if (loadOp == null)
+                {
+                    onFailed?.Invoke();
+                    PLog.Error<ScrapperLogger>($"Exception on load asset '{key}' from {locator}, operation = null");
+                    yield break;
+                }
+                
 
-            PLog.Info($"Loaded '{loadedAsset}' of type '{loadedAsset?.GetType().Name ?? "None"}' from path {key}");
-            onCompleted?.Invoke(loadedAsset);
+                yield return loadOp.Current;
+                
+                bool repeat = false;
+                do
+                {
+                    try
+                    {
+                        repeat = loadOp.MoveNext();
+                    }
+                    catch (Exception e)
+                    {
+                        PLog.Error<ScrapperLogger>($"Exception on load asset '{key}' from {locator}: {e.ToString()}");
+                        onFailed?.Invoke();
+                    }
 
-            if (loadedAsset != null && loadedAsset != fallbackObject)
-                Addressables.Release(loadedAsset);
-            
-            yield return null;
+                    yield return loadOp.Current;
+                } 
+                while (repeat);
+
+                yield break;
+            }
         }
         
         public static bool HasResourceOfType<T>(object key)
