@@ -55,6 +55,10 @@ namespace Rhinox.Scrapper
             T loadedAsset = default(T);
             if (AddressableResourceExists<T>(key))
             {
+                var addrDepLoader = new AddressableDependenciesDownloader();
+                var depLoaderEnumerator = addrDepLoader.DownloadAsync(key);
+                yield return depLoaderEnumerator;
+                
                 var loadAsset = Addressables.LoadAssetAsync<T>(key);
 
                 yield return loadAsset;
