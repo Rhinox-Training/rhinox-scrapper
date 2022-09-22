@@ -82,12 +82,7 @@ namespace Rhinox.Scrapper
         
         public bool AddressableResourceExists<T>(object key)
         {
-            foreach (var l in Addressables.ResourceLocators)
-            {
-                if (l.Locate(key, typeof(T), out IList<IResourceLocation> locs))
-                    return true;
-            }
-            return false;
+            return _locator.Locate(key, typeof(T), out IList<IResourceLocation> locs);
         }
 
         public IEnumerator<ProgressBytes> PreloadAllAssetsAsync(params object[] keys)
