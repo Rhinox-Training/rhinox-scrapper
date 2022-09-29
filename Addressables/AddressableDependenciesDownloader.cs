@@ -2,6 +2,7 @@
 using System.Collections;
 using System.Collections.Generic;
 using System.Linq;
+using System.Threading.Tasks;
 using Rhinox.Lightspeed.Collections;
 using Rhinox.Perceptor;
 using UnityEngine;
@@ -15,6 +16,9 @@ namespace Rhinox.Scrapper
     public class AddressableDependenciesDownloader : IDisposable
     {
         private bool _failed;
+        private float _timeSinceWaiting = -1.0f;
+        
+        private const double TASK_STALL_TIMEOUT = 60.0;
 
         public delegate void ProgressHandler(object key, float progress, long processedByteCount);
         public event ProgressHandler ProgressCallback;
@@ -22,6 +26,7 @@ namespace Rhinox.Scrapper
         public AddressableDependenciesDownloader()
         {
             ResourceManager.ExceptionHandler += CustomExceptionHandler;
+            _timeSinceWaiting = -1.0f;
         }
 
         public void Dispose()
@@ -41,6 +46,7 @@ namespace Rhinox.Scrapper
         {
             bool fullyDownloaded = false;
             _failed = false;
+            _timeSinceWaiting = -1.0f;
             while (!fullyDownloaded)
             {
                 if (_failed)
@@ -68,7 +74,20 @@ namespace Rhinox.Scrapper
 
                         string error = GetDownloadError(downloadDependencies);
                         if (error != null)
-                            PLog.Error<ScrapperLogger>("FOOBAR:" + error);
+                        {
+                            PLog.Error<ScrapperLogger>("Download ERROR:" + error);
+                            _failed = true;
+                            break;
+                        }
+
+                        bool checkStall = CheckStalledOperation(downloadDependencies);
+                        if (checkStall)
+                        {
+                            PLog.Error<ScrapperLogger>($"Task {downloadDependencies.Task} has stalled, WaitingForActivation");
+                            _failed = true;
+                            _timeSinceWaiting = -1.0f;
+                            break;
+                        }
 
                         PLog.Trace<ScrapperLogger>($"Download of addressables for {key} in progress {status.Percent * 100:##0.##}% at {currentTime.ToShortTimeString()} - {status.DownloadedBytes}");
                         progressCallback?.Invoke(status.Percent);
@@ -119,7 +138,7 @@ namespace Rhinox.Scrapper
             yield return 1.0f;
         }
         
-        string GetDownloadError(AsyncOperationHandle fromHandle)
+        private string GetDownloadError(AsyncOperationHandle fromHandle)
         {
             if (fromHandle.Status != AsyncOperationStatus.Failed)
                 return null;
@@ -134,6 +153,26 @@ namespace Rhinox.Scrapper
                 e = e.InnerException;
             }
             return null;
+        }
+
+        private bool CheckStalledOperation(AsyncOperationHandle handle)
+        {
+            bool waitingForActivation = handle.Task.Status == TaskStatus.WaitingForActivation;
+            if (!waitingForActivation)
+            {
+                _timeSinceWaiting = -1.0f;
+                return false;
+            }
+            
+            if (_timeSinceWaiting < 0.0f)
+                _timeSinceWaiting = Time.realtimeSinceStartup;
+            else
+            {
+                if ((Time.realtimeSinceStartup - _timeSinceWaiting) > TASK_STALL_TIMEOUT)
+                    return true;
+            }
+
+            return false;
         }
     }
 }
