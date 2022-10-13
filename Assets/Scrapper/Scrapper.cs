@@ -304,6 +304,9 @@ namespace Rhinox.Scrapper
 
                 yield break;
             }
+            
+            // If this code is reached fail the load asset
+            onFailed?.Invoke();
         }
         
         public static bool HasResourceOfType<T>(object key)
