@@ -79,9 +79,12 @@ namespace Rhinox.Scrapper
             }
 
             int tryCount = 0;
+            IEnumerator<float> enumerator = null;
+            UnityWebRequest www = null;
             do
             {
-                var enumerator = ExecuteWebRequest(path, timeout, (x) => { _downloadHandler = x; },
+                www = UnityWebRequest.Get(path);
+                enumerator = ExecuteWebRequest(www, timeout, (x) => { _downloadHandler = x; },
                     () => _downloadHandler = null);
                 yield return enumerator.Current;
                 while (enumerator.MoveNext())
@@ -119,11 +122,10 @@ namespace Rhinox.Scrapper
             yield return 1.0f;
         }
         
-        private static IEnumerator<float> ExecuteWebRequest(string path, int timeOut, Action<DownloadHandler> handler, Action onFailed = null)
+        private static IEnumerator<float> ExecuteWebRequest(UnityWebRequest www, int timeOut, Action<DownloadHandler> handler, Action onFailed = null)
         {
             // path = path.Replace("http://", "file:///");
             // path = path.Replace("https://", "file:///");
-            UnityWebRequest www = UnityWebRequest.Get(path);
             www.timeout = timeOut;
             www.SendWebRequest();
 
@@ -136,7 +138,7 @@ namespace Rhinox.Scrapper
                 www.result == UnityWebRequest.Result.ProtocolError ||
                 www.result == UnityWebRequest.Result.DataProcessingError)
             {
-                PLog.Error<ScrapperLogger>($"Network error: {path} - {www.error}");
+                PLog.Error<ScrapperLogger>($"Network error: {www.url} - {www.error}");
                 onFailed?.Invoke();
                 yield break;
             }
