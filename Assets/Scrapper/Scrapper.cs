@@ -1,6 +1,7 @@
 ﻿using System;
 using System.Collections;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Globalization;
 using System.IO;
 using System.Linq;
@@ -215,6 +216,8 @@ namespace Rhinox.Scrapper
                 ProgressBytes currentProgress = preloadEnumerator.Current;
                 yield return currentProgress;
                 PreloadProgressCallback?.Invoke(keys, currentProgress);
+                Stopwatch elapsed = new Stopwatch();
+                elapsed.Start();
                 bool repeat = false;
                 do
                 {
@@ -230,9 +233,13 @@ namespace Rhinox.Scrapper
                     }
 
                     currentProgress = preloadEnumerator.Current;
-                    progressHandler?.Invoke(currentProgress.Progress);
-                    PreloadProgressCallback?.Invoke(keys, currentProgress);
-                    yield return null;
+                    if (elapsed.ElapsedMilliseconds >= Time.unscaledDeltaTime)
+                    {
+                        progressHandler?.Invoke(currentProgress.Progress);
+                        PreloadProgressCallback?.Invoke(keys, currentProgress);
+                        yield return null;
+                        elapsed.Restart();
+                    }
                 } 
                 while (repeat);
 

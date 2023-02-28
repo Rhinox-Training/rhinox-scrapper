@@ -93,47 +93,56 @@ namespace Rhinox.Scrapper
                 yield break;
             }
 
-
             long totalBytes = 0;
             for (int i = 0; i < keys.Length; ++i)
             {
+                // TODO: Overlap between keys is possible
                 var key = keys[i];
                 long byteCountForKey = _bundleMirror.GetByteSizeFor(key);
                 totalBytes += byteCountForKey;
             }
 
             float progress = 0.0f;
+            const float firstSection = .8f;
+            const float secondSection = 1 - firstSection;
             for (int i = 0; i < keys.Length; ++i)
             {
                 var key = keys[i];
 
-                float keySectionSize = 1.0f / Math.Max((keyLength - 1), 1);
-                float offset = i / Math.Max((keyLength - 1), 1);
+                float keyPartDenominator = Math.Max((keyLength - 1), 1);
+                float keySectionSize = 1.0f / keyPartDenominator;
                 
+                float offset = i / keyPartDenominator;
+                float initialSectionSize = keySectionSize * firstSection;
+                
+                // Initial section
                 var enumeratedLoad = _bundleMirror.TryLoadBundlesFor(key);
-                progress = offset + (enumeratedLoad.Current * keySectionSize * 0.5f);
-                yield return new ProgressBytes() { Progress = progress, TotalBytes = totalBytes };
+                progress = offset + (enumeratedLoad.Current * initialSectionSize);
+                yield return new ProgressBytes(progress, totalBytes);
                 while (enumeratedLoad.MoveNext())
                 {
-                    progress = offset + (enumeratedLoad.Current * keySectionSize * 0.5f);
-                    yield return new ProgressBytes() { Progress = progress, TotalBytes = totalBytes };
+                    progress = offset + (enumeratedLoad.Current * initialSectionSize);
+                    yield return new ProgressBytes(progress, totalBytes);
                 }
 
-                progress = offset + (keySectionSize * 0.5f);
-                yield return new ProgressBytes() { Progress = progress, TotalBytes = totalBytes };
+                // Initial section done
+                progress = offset + initialSectionSize;
+                yield return new ProgressBytes(progress, totalBytes);
 
+                // Start secondary section
                 var addrDepLoader = new AddressableDependenciesDownloader();
                 var depLoaderEnumerator = addrDepLoader.DownloadAsync(key);
-                progress = offset + ((0.5f + (depLoaderEnumerator.Current * 0.5f)) * keySectionSize);
-                yield return new ProgressBytes() { Progress = progress, TotalBytes = totalBytes };
+                progress = offset + initialSectionSize + ((depLoaderEnumerator.Current * secondSection) * keySectionSize);
+                yield return new ProgressBytes(progress, totalBytes);
                 while (depLoaderEnumerator.MoveNext())
                 {
-                    progress = offset + ((0.5f + (depLoaderEnumerator.Current * 0.5f)) * keySectionSize);
-                    yield return new ProgressBytes() { Progress = progress, TotalBytes = totalBytes };
+                    progress = offset + initialSectionSize + ((depLoaderEnumerator.Current * secondSection) * keySectionSize);
+                    yield return new ProgressBytes(progress, totalBytes);
                 }
 
+                // Make sure it doesn't reach '1' yet
                 progress = offset + (keySectionSize * 0.999f);
-                yield return new ProgressBytes() { Progress = progress, TotalBytes = totalBytes };
+                yield return new ProgressBytes(progress, totalBytes);
             }
 
             progress = 1.0f;

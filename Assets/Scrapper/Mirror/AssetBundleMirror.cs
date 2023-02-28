@@ -132,7 +132,11 @@ namespace Rhinox.Scrapper
         public IEnumerator<float> TryLoadBundlesFor(object key)
         {
             var bundles = FindAssetBundlesFor(key).ToArray();
-            int bundleCountForProgress =  Math.Max((bundles.Length - 1), 1);
+            float bundleCountDenominator = (float) Mathf.Max((bundles.Length - 1), 1);
+
+            const float firstPart = .5f;
+            const float secondPart = 1f - firstPart;
+            
             for (int i = 0; i < bundles.Length; ++i)
             {
                 var bundle = bundles[i];
@@ -146,8 +150,8 @@ namespace Rhinox.Scrapper
                 var bundleInfo = _bundleInfoByBundleName[bundle.Request.BundleName];
                 AddressableUtility.FixupMirrorProgress(ref bundleInfo.Location);
 
-                float progress = (float) i / bundleCountForProgress;
-                yield return Mathf.Min(0.05f + progress * 0.4f, 0.5f);
+                float progress = i / bundleCountDenominator;
+                yield return Mathf.Min((firstPart * .1f) + progress * (firstPart * .9f), firstPart);
             }
 
             for (int i = 0; i < bundles.Length; ++i)
@@ -161,13 +165,13 @@ namespace Rhinox.Scrapper
                     continue;
                 }
 
-                float chunkSize = 1.0f / bundleCountForProgress;
-                float progress = (float) i / bundleCountForProgress;
+                float chunkSize = 1.0f / bundleCountDenominator;
+                float progress = i / bundleCountDenominator;
 
                 var downloadHandler = _downloader.DownloadAssetAsync(info.RemoteBundleSubpath, 180);
-                yield return 0.5f + ((progress + (downloadHandler.Current * chunkSize)) * 0.5f);
+                yield return firstPart + ((progress + (downloadHandler.Current * chunkSize)) * secondPart);
                 while (downloadHandler.MoveNext())
-                    yield return 0.5f + ((progress + (downloadHandler.Current * chunkSize)) * 0.5f);
+                    yield return firstPart + ((progress + (downloadHandler.Current * chunkSize)) * secondPart);
 
                 info.MarkCached(true);
             }

@@ -25,6 +25,9 @@ namespace Rhinox.Scrapper
     
     public static class AddressableUtility
     {
+        /// <summary>
+        /// Loads Addressables into cache
+        /// </summary>
         public static IEnumerator LoadContentCatalogAsync(string remotePath, CatalogLoadResult result)
         {
             if (result == null)
@@ -284,7 +287,7 @@ namespace Rhinox.Scrapper
                 PLog.Warn<ScrapperLogger>($"Can't find type information to fix mirror progress");
                 return false;
             }
-           
+            
             if (_compactLocationType.IsInstanceOfType(location))
             {
                 var virt = AddressableUtility.MakeVirtual(bundleRequestOptions);
