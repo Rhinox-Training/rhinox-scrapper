@@ -233,7 +233,8 @@ namespace Rhinox.Scrapper
                     }
 
                     currentProgress = preloadEnumerator.Current;
-                    if (elapsed.ElapsedMilliseconds >= Time.unscaledDeltaTime)
+                    // Only yield when a half frame has passed (half so we can still have a decent fps)
+                    if (elapsed.Elapsed.TotalSeconds >= Time.unscaledDeltaTime / 2)
                     {
                         progressHandler?.Invoke(currentProgress.Progress);
                         PreloadProgressCallback?.Invoke(keys, currentProgress);
