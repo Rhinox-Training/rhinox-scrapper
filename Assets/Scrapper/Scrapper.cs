@@ -192,15 +192,25 @@ namespace Rhinox.Scrapper
 
         public static IEnumerator PreloadAsync(params object[] keys)
         {
-            return PreloadAsync((Action<float>) null, keys);
+            return PreloadAsync(null, keys);
         }
 
         public static IEnumerator PreloadAsync(Action<float> progressHandler, params object[] keys)
         {
-            long totalBytes = 0;
-            foreach (var loaderKey in _resourceLocators.Keys)
+            var locators = _resourceLocators.Values.ToArray();
+            long totalBytes = 0, bytesDownloaded = 0;
+            foreach (var locator in locators)
+                totalBytes += locator.GetTotalByteSize(keys);
+
+            const float initialSectionSize = .8f;
+            const float secondarySectionSize = 1f - initialSectionSize;
+
+            float fraction = 1f / locators.Length;
+            for (var i = 0; i < locators.Length; i++)
             {
-                var locator = _resourceLocators[loaderKey];
+                float partDone = i * fraction;
+                var locator = locators[i];
+                PLog.Trace<ScrapperLogger>($"Starting preload for '{locator.Locator.LocatorId}'");
                 IEnumerator<ProgressBytes> preloadEnumerator = null;
                 try
                 {
@@ -214,8 +224,9 @@ namespace Rhinox.Scrapper
                 }
 
                 ProgressBytes currentProgress = preloadEnumerator.Current;
-                yield return currentProgress;
-                PreloadProgressCallback?.Invoke(keys, currentProgress);
+                float progress = partDone + currentProgress.Progress * fraction;
+                yield return new ProgressBytes(progress * initialSectionSize, totalBytes);
+
                 Stopwatch elapsed = new Stopwatch();
                 elapsed.Start();
                 bool repeat = false;
@@ -236,16 +247,39 @@ namespace Rhinox.Scrapper
                     // Only yield when a half frame has passed (half so we can still have a decent fps)
                     if (elapsed.Elapsed.TotalSeconds >= Time.unscaledDeltaTime / 2)
                     {
-                        progressHandler?.Invoke(currentProgress.Progress);
-                        PreloadProgressCallback?.Invoke(keys, currentProgress);
+                        progress = partDone + currentProgress.Progress * fraction;
+                        progress *= initialSectionSize;
+                        progressHandler?.Invoke(progress);
+                        PreloadProgressCallback?.Invoke(keys, new ProgressBytes(progress, totalBytes));
                         yield return null;
                         elapsed.Restart();
                     }
-                } 
-                while (repeat);
+                } while (repeat);
 
-                totalBytes += currentProgress.TotalBytes;
+                PLog.Trace<ScrapperLogger>($"Preload for '{locator.Locator.LocatorId}' done...");
+
+                bytesDownloaded += currentProgress.TotalBytes;
                 yield return null;
+            }
+
+            // Start secondary section
+            float keySectionSize = 1.0f / keys.Length;
+            
+            for (int i = 0; i < keys.Length; ++i)
+            {
+                float offset = i * keySectionSize;
+                
+                var key = keys[i];
+
+                var addrDepLoader = new AddressableDependenciesDownloader();
+                var depLoaderEnumerator = addrDepLoader.DownloadAsync(key);
+                float progress = initialSectionSize + (offset + (depLoaderEnumerator.Current * keySectionSize) * secondarySectionSize);
+                yield return new ProgressBytes(progress, totalBytes);
+                while (depLoaderEnumerator.MoveNext())
+                {
+                    progress = initialSectionSize + (offset + (depLoaderEnumerator.Current * keySectionSize) * secondarySectionSize);
+                    yield return new ProgressBytes(progress, totalBytes);
+                }
             }
 
             PLog.Debug<ScrapperLogger>($"PreloadAsync finished for {string.Join(", ", keys)}");

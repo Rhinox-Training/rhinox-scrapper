@@ -85,14 +85,8 @@ namespace Rhinox.Scrapper
             return _locator.Locate(key, typeof(T), out IList<IResourceLocation> locs);
         }
 
-        public IEnumerator<ProgressBytes> PreloadAllAssetsAsync(params object[] keys)
+        public long GetTotalByteSize(params object[] keys)
         {
-            float keyLength = keys.Length;
-            if (keyLength == 0)
-            {
-                yield break;
-            }
-
             long totalBytes = 0;
             for (int i = 0; i < keys.Length; ++i)
             {
@@ -102,9 +96,20 @@ namespace Rhinox.Scrapper
                 totalBytes += byteCountForKey;
             }
 
+            return totalBytes;
+        }
+
+        public IEnumerator<ProgressBytes> PreloadAllAssetsAsync(params object[] keys)
+        {
+            float keyLength = keys.Length;
+            if (keyLength == 0)
+            {
+                yield break;
+            }
+
+            long totalBytes = GetTotalByteSize();
+
             float progress = 0.0f;
-            const float firstSection = .8f;
-            const float secondSection = 1 - firstSection;
             for (int i = 0; i < keys.Length; ++i)
             {
                 var key = keys[i];
@@ -113,7 +118,7 @@ namespace Rhinox.Scrapper
                 float keySectionSize = 1.0f / keyPartDenominator;
                 
                 float offset = i / keyPartDenominator;
-                float initialSectionSize = keySectionSize * firstSection;
+                float initialSectionSize = keySectionSize;
                 
                 // Initial section
                 var enumeratedLoad = _bundleMirror.TryLoadBundlesFor(key);
@@ -128,17 +133,6 @@ namespace Rhinox.Scrapper
                 // Initial section done
                 progress = offset + initialSectionSize;
                 yield return new ProgressBytes(progress, totalBytes);
-
-                // Start secondary section
-                var addrDepLoader = new AddressableDependenciesDownloader();
-                var depLoaderEnumerator = addrDepLoader.DownloadAsync(key);
-                progress = offset + initialSectionSize + ((depLoaderEnumerator.Current * secondSection) * keySectionSize);
-                yield return new ProgressBytes(progress, totalBytes);
-                while (depLoaderEnumerator.MoveNext())
-                {
-                    progress = offset + initialSectionSize + ((depLoaderEnumerator.Current * secondSection) * keySectionSize);
-                    yield return new ProgressBytes(progress, totalBytes);
-                }
 
                 // Make sure it doesn't reach '1' yet
                 progress = offset + (keySectionSize * 0.999f);

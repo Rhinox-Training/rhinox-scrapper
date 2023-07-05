@@ -194,7 +194,14 @@ namespace Rhinox.Scrapper
                     AddressableUtility.ReleaseAsyncOperationHandles(handles);
                 
                 string cachedFolderPath = Path.Combine(rootPath, info.BundleName);
-                FileHelper.DeleteDirectoryIfExists(cachedFolderPath);
+                try
+                {
+                    FileHelper.DeleteDirectoryIfExists(cachedFolderPath);
+                }
+                catch (IOException e)
+                {
+                    PLog.Error<ScrapperLogger>($"Failed to delete cache '{cachedFolderPath}': {e.ToString()}");
+                }
                 
                 if (!_downloader.ClearTargetAsset(info.RemoteBundleSubpath))
                     PLog.Error<ScrapperLogger>($"Failed to clear '{info.RemoteBundleSubpath}' at {_downloader.LocalPath}");

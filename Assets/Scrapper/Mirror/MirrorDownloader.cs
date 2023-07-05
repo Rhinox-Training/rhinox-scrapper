@@ -3,6 +3,7 @@ using System.Collections;
 using System.Collections.Generic;
 using System.Data;
 using System.IO;
+using Rhinox.Lightspeed;
 using Rhinox.Lightspeed.IO;
 using Rhinox.Perceptor;
 using UnityEngine.Networking;
@@ -83,6 +84,7 @@ namespace Rhinox.Scrapper
             UnityWebRequest www = null;
             do
             {
+                PLog.Debug<ScrapperLogger>($"Downloading {path}...");
                 www = UnityWebRequest.Get(path);
                 enumerator = ExecuteWebRequest(www, timeout, (x) => { _downloadHandler = x; },
                     () => _downloadHandler = null);
@@ -100,6 +102,12 @@ namespace Rhinox.Scrapper
                 PLog.Error<ScrapperLogger>($"Download still failed after {retryCount} retries, can't download resource '{relativeFilePath}'...");
                 yield break;
             }
+            
+            if (!www.IsRequestValid(out string error))
+            {
+                PLog.Error<ScrapperLogger>($"Download failed with error '{error}', can't download resource '{relativeFilePath}'...");
+                yield break;
+            } 
 
             var bytes = _downloadHandler.data;
             _downloadHandler = null;
