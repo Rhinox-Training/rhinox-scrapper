@@ -273,14 +273,25 @@ namespace Rhinox.Scrapper
 
                 var addrDepLoader = new AddressableDependenciesDownloader();
                 var depLoaderEnumerator = addrDepLoader.DownloadAsync(key);
-                float progress = initialSectionSize + (offset + (depLoaderEnumerator.Current * keySectionSize) * secondarySectionSize);
-                yield return new ProgressBytes(progress, totalBytes);
+                
+                Stopwatch elapsed = new Stopwatch();
+                elapsed.Start();
+                
                 while (depLoaderEnumerator.MoveNext())
                 {
-                    progress = initialSectionSize + (offset + (depLoaderEnumerator.Current * keySectionSize) * secondarySectionSize);
-                    yield return new ProgressBytes(progress, totalBytes);
+                    if (elapsed.Elapsed.TotalSeconds >= Time.unscaledDeltaTime / 2)
+                    {
+                        float progress = initialSectionSize + (offset + (depLoaderEnumerator.Current * keySectionSize) * secondarySectionSize);
+                        progressHandler?.Invoke(progress);
+                        PreloadProgressCallback?.Invoke(keys, new ProgressBytes(progress, totalBytes));
+                        yield return null;
+                        elapsed.Restart();
+                    }
                 }
             }
+            
+            progressHandler?.Invoke(1);
+            PreloadProgressCallback?.Invoke(keys, new ProgressBytes(1, totalBytes));
 
             PLog.Debug<ScrapperLogger>($"PreloadAsync finished for {string.Join(", ", keys)}");
             PreloadCompleted?.Invoke(keys, totalBytes);
