@@ -67,11 +67,16 @@ namespace Rhinox.Scrapper
                 {
                     var handle = Addressables.LoadAssetAsync<T>(key);
                     await handle.Task;
-                    
-                    if (handle.Status != AsyncOperationStatus.Succeeded)
+
+                    if (handle.Status == AsyncOperationStatus.Succeeded)
+                    {
+                        loadedAsset = handle.Result;
+                    }
+                    else
+                    {
+                        loadedAsset = fallbackObject;
                         PLog.Error<ScrapperLogger>($"Load of object at path {key} failed: {handle.Status}");
-                    
-                    loadedAsset = handle.Result;
+                    }
                 }
             }
             else
