@@ -3,6 +3,7 @@ using System.Collections;
 using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
+using System.Threading.Tasks;
 using Rhinox.Lightspeed;
 using Rhinox.Perceptor;
 using UnityEngine;
@@ -47,24 +48,31 @@ namespace Rhinox.Scrapper
             _bundleMirror.InitializeBundleInfo();
         }
         
-        public IEnumerator LoadAsset<T>(object key, Action<T> onCompleted, Action<object> onFailed = null, T fallbackObject = default(T))
+        public async Task LoadAsset<T>(object key, Action<T> onCompleted, T fallbackObject = default(T))
             where T : class
         {
-            yield return _bundleMirror.TryLoadBundlesFor(key);
+            await _bundleMirror.TryLoadBundlesFor(key, null);
             
             T loadedAsset = default(T);
             if (AddressableResourceExists<T>(key))
             {
-                var addrDepLoader = new AddressableDependenciesDownloader();
-                var depLoaderEnumerator = addrDepLoader.DownloadAsync(key);
-                yield return depLoaderEnumerator;
+                //// Due to preload -> all dependencies are already loaded
+                // using (new TraceTimer($"LoadAsset-AddressableDependenciesDownloader '{key}'"))
+                // {
+                //     var addrDepLoader = new AddressableDependenciesDownloader();
+                //     await addrDepLoader.DownloadAsync(key, null);
+                // }
                 
-                var loadAsset = Addressables.LoadAssetAsync<T>(key);
-
-                yield return loadAsset;
-                if(loadAsset.Status != AsyncOperationStatus.Succeeded)
-                    PLog.Error<ScrapperLogger>($"Load of object at path {key} failed: {loadAsset.Status}");
-                loadedAsset = loadAsset.Result;
+                using (new TraceTimer($"LoadAsset-LoadAssetAsync '{key}'"))
+                {
+                    var handle = Addressables.LoadAssetAsync<T>(key);
+                    await handle.Task;
+                    
+                    if (handle.Status != AsyncOperationStatus.Succeeded)
+                        PLog.Error<ScrapperLogger>($"Load of object at path {key} failed: {handle.Status}");
+                    
+                    loadedAsset = handle.Result;
+                }
             }
             else
             {
@@ -99,13 +107,11 @@ namespace Rhinox.Scrapper
             return totalBytes;
         }
 
-        public IEnumerator<ProgressBytes> PreloadAllAssetsAsync(params object[] keys)
+        public async Task PreloadAllAssetsAsync(IProgress<ProgressBytes> progressHandler, params object[] keys)
         {
             float keyLength = keys.Length;
             if (keyLength == 0)
-            {
-                yield break;
-            }
+                return;
 
             long totalBytes = GetTotalByteSize();
 
@@ -121,26 +127,16 @@ namespace Rhinox.Scrapper
                 float initialSectionSize = keySectionSize;
                 
                 // Initial section
-                var enumeratedLoad = _bundleMirror.TryLoadBundlesFor(key);
-                progress = offset + (enumeratedLoad.Current * initialSectionSize);
-                yield return new ProgressBytes(progress, totalBytes);
-                while (enumeratedLoad.MoveNext())
-                {
-                    progress = offset + (enumeratedLoad.Current * initialSectionSize);
-                    yield return new ProgressBytes(progress, totalBytes);
-                }
-
-                // Initial section done
-                progress = offset + initialSectionSize;
-                yield return new ProgressBytes(progress, totalBytes);
-
+                progress = offset;
+                var subHandler = ProgressHelper.Pipe(progressHandler, totalBytes, progress, initialSectionSize);
+                await _bundleMirror.TryLoadBundlesFor(key, subHandler);
+                
                 // Make sure it doesn't reach '1' yet
                 progress = offset + (keySectionSize * 0.999f);
-                yield return new ProgressBytes(progress, totalBytes);
+                progressHandler.Report(new ProgressBytes(progress, totalBytes));
             }
 
-            progress = 1.0f;
-            yield return new ProgressBytes() { Progress = progress, TotalBytes = totalBytes };
+            progressHandler.Report(new ProgressBytes(1f, totalBytes));
         }
 
         public void ClearCache()

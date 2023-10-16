@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Reflection;
+using System.Threading.Tasks;
 using Rhinox.Lightspeed;
 using Rhinox.Lightspeed.IO;
 using Rhinox.Perceptor;
@@ -85,7 +86,7 @@ namespace Rhinox.Scrapper
             var info = new AssetBundleInformation()
             {
                 Location = bundle.Location,
-                BundleName = bundle.Request.BundleName,
+                BundleName = GetBundleKey(bundle),
                 Hash = bundle.Request.Hash,
                 RemoteBundleSubpath = bundle.Location.PrimaryKey.Replace($"_{bundle.Request.Hash}", "")
             };
@@ -129,35 +130,40 @@ namespace Rhinox.Scrapper
             return byteSize;
         }
 
-        public IEnumerator<float> TryLoadBundlesFor(object key)
+        private readonly Dictionary<object, AssetBundleLocation[]> _locationsByKey = new Dictionary<object, AssetBundleLocation[]>();
+        public async Task TryLoadBundlesFor(object key, IProgress<float> progressHandler)
         {
-            var bundles = FindAssetBundlesFor(key).ToArray();
-            float bundleCountDenominator = (float) Mathf.Max((bundles.Length - 1), 1);
-
-            const float firstPart = .5f;
-            const float secondPart = 1f - firstPart;
+            if (!_locationsByKey.TryGetValue(key, out AssetBundleLocation[] bundles))
+            {
+                bundles = FindAssetBundlesFor(key).ToArray();
+                _locationsByKey[key] = bundles;
+            }
             
+            float bundleCountDenominator = Mathf.Max((bundles.Length - 1), 1);
+            
+            // Ensure all bundles have their info set
             for (int i = 0; i < bundles.Length; ++i)
             {
                 var bundle = bundles[i];
-                if (!_bundleInfoByBundleName.ContainsKey(bundle.Request.BundleName))
+                string bundleKey = GetBundleKey(bundle);
+                if (!_bundleInfoByBundleName.TryGetValue(bundleKey, out var bundleInfo))
                 {
                     PLog.Warn<ScrapperLogger>($"Bundle info missing for bundle? Creating anyway");
-                    var info = Create(bundle);
-                    _bundleInfoByBundleName.Add(info.BundleName, info);
+                    
+                    bundleInfo = Create(bundle);
+                    
+                    _bundleInfoByBundleName[bundleKey] = bundleInfo;
                 }
-
-                var bundleInfo = _bundleInfoByBundleName[bundle.Request.BundleName];
-                AddressableUtility.FixupMirrorProgress(ref bundleInfo.Location);
-
-                float progress = i / bundleCountDenominator;
-                yield return Mathf.Min((firstPart * .1f) + progress * (firstPart * .9f), firstPart);
+                
+                if (progressHandler != null) 
+                    AddressableUtility.FixupMirrorProgress(ref bundleInfo.Location);
             }
 
+            // Download bundles (if not cached)
             for (int i = 0; i < bundles.Length; ++i)
             {
                 var bundle = bundles[i];
-                var info = _bundleInfoByBundleName[bundle.Request.BundleName];
+                var info = _bundleInfoByBundleName[GetBundleKey(bundle)];
                 
                 if (info.IsCached)
                 {
@@ -165,19 +171,25 @@ namespace Rhinox.Scrapper
                     continue;
                 }
 
-                float chunkSize = 1.0f / bundleCountDenominator;
-                float progress = i / bundleCountDenominator;
-
-                var downloadHandler = _downloader.DownloadAssetAsync(info.RemoteBundleSubpath, 180);
-                yield return firstPart + ((progress + (downloadHandler.Current * chunkSize)) * secondPart);
-                while (downloadHandler.MoveNext())
-                    yield return firstPart + ((progress + (downloadHandler.Current * chunkSize)) * secondPart);
-
+                Progress<float> chunkProgressHandler = null;
+                if (progressHandler != null)
+                {
+                    float chunkSize = 1.0f / bundleCountDenominator;
+                    float progress = i / bundleCountDenominator;
+                    
+                    chunkProgressHandler = new Progress<float>();
+                    chunkProgressHandler.ProgressChanged += (_, v) => progressHandler.Report(progress + v * chunkSize);
+                }
+                
+                await _downloader.DownloadAssetAsync(info.RemoteBundleSubpath, chunkProgressHandler, 180);
+                
                 info.MarkCached(true);
             }
 
-            yield return 1.0f;
+            progressHandler?.Report(1f);
         }
+
+        private static string GetBundleKey(AssetBundleLocation bundle) => bundle.Request.BundleName;
 
         public void ClearCache()
         {

@@ -5,6 +5,7 @@ using System.Diagnostics;
 using System.Globalization;
 using System.IO;
 using System.Linq;
+using System.Threading.Tasks;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
 using Rhinox.Lightspeed;
@@ -28,6 +29,7 @@ namespace Rhinox.Scrapper
         private static string _rootPath;
         internal static string RootPath => _rootPath;
         private static Dictionary<string, MirroredResourceCatalog> _resourceLocators;
+        private static ILookup<string, MirroredResourceCatalog> _loadedKeyMapping;
 
         public static IReadOnlyCollection<string> LoadedCatalogs =>
             _resourceLocators != null ? (IReadOnlyCollection<string>) _resourceLocators.Keys : Array.Empty<string>();
@@ -190,178 +192,127 @@ namespace Rhinox.Scrapper
         }
 
 
-        public static IEnumerator PreloadAsync(params object[] keys)
+        public static async Task PreloadAsync(params object[] keys)
         {
-            return PreloadAsync(null, keys);
+            var progressHandler = new Progress<float>();
+            await PreloadAsync(progressHandler, keys);
         }
 
-        public static IEnumerator PreloadAsync(Action<float> progressHandler, params object[] keys)
+        public static async Task PreloadAsync(IProgress<float> progressHandler, params object[] keys)
         {
             var locators = _resourceLocators.Values.ToArray();
+            
+            // Calculate total bytes to be downloaded
+            long[] bytes = new long[locators.Length];
             long totalBytes = 0, bytesDownloaded = 0;
-            foreach (var locator in locators)
-                totalBytes += locator.GetTotalByteSize(keys);
+            for (var i = 0; i < locators.Length; i++)
+                bytes[i] = locators[i].GetTotalByteSize(keys);
+            totalBytes = bytes.Sum();
 
+            // Divide it into sections (first = assets, second = dependencies)
             const float initialSectionSize = .8f;
             const float secondarySectionSize = 1f - initialSectionSize;
 
-            float fraction = 1f / locators.Length;
+            float fraction = initialSectionSize / locators.Length;
             for (var i = 0; i < locators.Length; i++)
             {
                 float partDone = i * fraction;
                 var locator = locators[i];
                 PLog.Trace<ScrapperLogger>($"Starting preload for '{locator.Locator.LocatorId}'");
-                IEnumerator<ProgressBytes> preloadEnumerator = null;
                 try
                 {
-                    preloadEnumerator = locator.PreloadAllAssetsAsync(keys);
+                    var subProgressHandler = new Progress<float>();
+                    subProgressHandler.ProgressChanged += (_, v) =>
+                    {
+                        var progress = partDone + fraction * v;
+                        progressHandler.Report(progress);
+                        PreloadProgressCallback?.Invoke(keys, new ProgressBytes(v, totalBytes));
+                    };
+                    
+                    var subHandler = ProgressHelper.PipeBytes(progressHandler, partDone, fraction);
+                    await locator.PreloadAllAssetsAsync(subHandler, keys);
                 }
                 catch (Exception e)
                 {
                     CustomErrorHandling?.Invoke($"Preload failure: {e.ToString()}", e);
                     PreloadFailed?.Invoke(keys, $"Preload failure: {e.ToString()}");
-                    yield break;
+                    return;
                 }
 
-                ProgressBytes currentProgress = preloadEnumerator.Current;
-                float progress = partDone + currentProgress.Progress * fraction;
-                yield return new ProgressBytes(progress * initialSectionSize, totalBytes);
-
-                Stopwatch elapsed = new Stopwatch();
-                elapsed.Start();
-                bool repeat = false;
-                do
-                {
-                    try
-                    {
-                        repeat = preloadEnumerator.MoveNext();
-                    }
-                    catch (Exception e)
-                    {
-                        CustomErrorHandling?.Invoke($"Preload failure: {e.ToString()}", e);
-                        PreloadFailed?.Invoke(keys, $"Preload failure: {e.ToString()}");
-                        yield break;
-                    }
-
-                    currentProgress = preloadEnumerator.Current;
-                    // Only yield when a half frame has passed (half so we can still have a decent fps)
-                    if (elapsed.Elapsed.TotalSeconds >= Time.unscaledDeltaTime / 2)
-                    {
-                        progress = partDone + currentProgress.Progress * fraction;
-                        progress *= initialSectionSize;
-                        progressHandler?.Invoke(progress);
-                        PreloadProgressCallback?.Invoke(keys, new ProgressBytes(progress, totalBytes));
-                        yield return null;
-                        elapsed.Restart();
-                    }
-                } while (repeat);
+                progressHandler.Report(partDone + fraction);
 
                 PLog.Trace<ScrapperLogger>($"Preload for '{locator.Locator.LocatorId}' done...");
 
-                bytesDownloaded += currentProgress.TotalBytes;
-                yield return null;
+                bytesDownloaded += bytes[i];
             }
 
             // Start secondary section
-            float keySectionSize = 1.0f / keys.Length;
-            
+            float keySectionSize = secondarySectionSize / keys.Length;
             for (int i = 0; i < keys.Length; ++i)
             {
                 float offset = i * keySectionSize;
                 
                 var key = keys[i];
-
-                var addrDepLoader = new AddressableDependenciesDownloader();
-                var depLoaderEnumerator = addrDepLoader.DownloadAsync(key);
-                
-                Stopwatch elapsed = new Stopwatch();
-                elapsed.Start();
-                
-                while (depLoaderEnumerator.MoveNext())
+                var subProgressHandler = new Progress<float>();
+                subProgressHandler.ProgressChanged += (_, v) =>
                 {
-                    if (elapsed.Elapsed.TotalSeconds >= Time.unscaledDeltaTime / 2)
-                    {
-                        float progress = initialSectionSize + (offset + (depLoaderEnumerator.Current * keySectionSize) * secondarySectionSize);
-                        progressHandler?.Invoke(progress);
-                        PreloadProgressCallback?.Invoke(keys, new ProgressBytes(progress, totalBytes));
-                        yield return null;
-                        elapsed.Restart();
-                    }
-                }
+                    var progress = initialSectionSize + offset + keySectionSize * v;
+                    progressHandler.Report(progress);
+                    PreloadProgressCallback?.Invoke(keys, new ProgressBytes(v, totalBytes));
+                };
+                
+                var addrDepLoader = new AddressableDependenciesDownloader();
+                await addrDepLoader.DownloadAsync(key, subProgressHandler);
             }
             
-            progressHandler?.Invoke(1);
+            progressHandler.Report(1);
             PreloadProgressCallback?.Invoke(keys, new ProgressBytes(1, totalBytes));
 
             PLog.Debug<ScrapperLogger>($"PreloadAsync finished for {string.Join(", ", keys)}");
             PreloadCompleted?.Invoke(keys, totalBytes);
         }
-        
-        public static IEnumerator LoadAssetAsync<T>(string key, Action<T> onCompleted, T fallbackObject = default(T), Action onFailed = null)
+
+        public static async Task LoadAssetAsync<T>(string key, Action<T> onCompleted, T fallbackObject = default(T), Action onFailed = null)
             where T : class
         {
             if (!Initialized)
             {
                 PLog.Warn<ScrapperLogger>($"Scrapper not initialized, skipping...");
                 onFailed?.Invoke();
-                yield break;
+                return;
             }
 
-            foreach (var loaderKey in _resourceLocators.Keys)
+            if (!GetResourceLoaderForKey<T>(key, out string loaderKey))
             {
-                var locator = _resourceLocators[loaderKey];
+                onFailed?.Invoke();
+                return;
+            }
+
+            var locator = _resourceLocators[loaderKey];
+            
+            await locator.LoadAsset<T>(key, onCompleted, fallbackObject);
+        }
+
+        private static readonly Dictionary<string, string> _resourceLoaderByKey = new Dictionary<string, string>();
+        private static bool GetResourceLoaderForKey<T>(string key, out string loaderKey) where T : class
+        {
+            if (_resourceLoaderByKey.TryGetValue(key, out loaderKey))
+                return true;
+            
+            foreach (var loaderKeyOption in _resourceLocators.Keys)
+            {
+                var locator = _resourceLocators[loaderKeyOption];
                 if (!locator.AddressableResourceExists<T>(key))
                     continue;
 
-                IEnumerator loadOp = null;
-
-                try
-                {
-                    loadOp = locator.LoadAsset<T>(key,
-                        onCompleted,
-                        (fail) => { onFailed?.Invoke(); },
-                        fallbackObject);
-                }
-                catch (Exception e)
-                {
-                    PLog.Error<ScrapperLogger>($"Exception on load asset '{key}' from {locator}: {e.ToString()}");
-                    onFailed?.Invoke();
-                }
-
-                if (loadOp == null)
-                {
-                    onFailed?.Invoke();
-                    PLog.Error<ScrapperLogger>($"Exception on load asset '{key}' from {locator}, operation = null");
-                    yield break;
-                }
-                
-
-                yield return loadOp.Current;
-                
-                bool repeat = false;
-                do
-                {
-                    try
-                    {
-                        repeat = loadOp.MoveNext();
-                    }
-                    catch (Exception e)
-                    {
-                        PLog.Error<ScrapperLogger>($"Exception on load asset '{key}' from {locator}: {e.ToString()}");
-                        onFailed?.Invoke();
-                    }
-
-                    yield return loadOp.Current;
-                } 
-                while (repeat);
-
-                yield break;
+                loaderKey = loaderKeyOption;
+                _resourceLoaderByKey[key] = loaderKeyOption;
+                return true;
             }
-            
-            // If this code is reached fail the load asset
-            onFailed?.Invoke();
+
+            return false;
         }
-        
+
         public static bool HasResourceOfType<T>(object key)
         {
             foreach (var catalog in _resourceLocators.Values)
@@ -483,7 +434,7 @@ namespace Rhinox.Scrapper
         /// </summary>
         /// <param name="extensionFilter">Include '.prefab', '.mat', etc.</param>
         /// <returns></returns>
-        public static IReadOnlyCollection<string> GetLoadedResourceKeys(string extensionFilter = null)
+        public static IList<string> GetLoadedResourceKeys(string extensionFilter = null)
         {
             if (_resourceLocators == null)
                 return Array.Empty<string>();

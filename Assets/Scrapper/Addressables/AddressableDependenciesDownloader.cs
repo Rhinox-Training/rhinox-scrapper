@@ -16,7 +16,6 @@ namespace Rhinox.Scrapper
     public class AddressableDependenciesDownloader : IDisposable
     {
         private bool _failed;
-        private float _timeSinceWaiting = -1.0f;
         
         private const double TASK_STALL_TIMEOUT = 60.0;
 
@@ -26,7 +25,6 @@ namespace Rhinox.Scrapper
         public AddressableDependenciesDownloader()
         {
             ResourceManager.ExceptionHandler += CustomExceptionHandler;
-            _timeSinceWaiting = -1.0f;
         }
 
         public void Dispose()
@@ -42,100 +40,59 @@ namespace Rhinox.Scrapper
             _failed = true;
         }
 
-        public IEnumerator<float> DownloadAsync(object key, Action<float> progressCallback = null)
+        public async Task DownloadAsync(object key, IProgress<float> progressHandler)
         {
-            bool fullyDownloaded = false;
             _failed = false;
-            _timeSinceWaiting = -1.0f;
-            while (!fullyDownloaded)
+            
+            if (_failed)
+                PLog.Warn<ScrapperLogger>($"Restart DownloadDependenciesAsync");
+            
+            AsyncOperationHandle<long> getDownloadSize = Addressables.GetDownloadSizeAsync(key);
+            await getDownloadSize.Task;
+
+            // if (getDownloadSize.Result == 0)
+            //     return;
+            
+            AsyncOperationHandle downloadDependencies = Addressables.DownloadDependenciesAsync(key, false);
+            if (progressHandler != null)
             {
-                if (_failed)
-                    PLog.Warn<ScrapperLogger>($"Restart DownloadDependenciesAsync");
-                AsyncOperationHandle downloadDependencies = Addressables.DownloadDependenciesAsync(key, false);
-                DownloadStatus status = downloadDependencies.GetDownloadStatus();
-                long downloadedBytes = 0;
-                const int maxSamples = 15;
-                LimitedQueue<long> downloadByteSamples = new LimitedQueue<long>(maxSamples);
-                var lastCacheTime = DateTime.Now;
-                _failed = false;
                 while (!downloadDependencies.IsDone && !_failed)
                 {
-                    try
+                    await Task.Delay(10);
+                
+                    string error = GetDownloadError(downloadDependencies);
+                    if (error != null)
                     {
-                        status = downloadDependencies.GetDownloadStatus();
-                        downloadedBytes = status.DownloadedBytes;
-                        var currentTime = DateTime.Now;
-                        var curSeconds = (currentTime - lastCacheTime).TotalSeconds;
-                        if (curSeconds >= 2.0)
-                        {
-                            downloadByteSamples.Enqueue(downloadedBytes);
-                            lastCacheTime = DateTime.Now;
-                        }
-
-                        string error = GetDownloadError(downloadDependencies);
-                        if (error != null)
-                        {
-                            PLog.Error<ScrapperLogger>("Download ERROR:" + error);
-                            _failed = true;
-                            break;
-                        }
-
-                        bool checkStall = CheckStalledOperation(downloadDependencies);
-                        if (checkStall)
-                        {
-                            PLog.Error<ScrapperLogger>($"Task {downloadDependencies.Task} has stalled, WaitingForActivation");
-                            _failed = true;
-                            _timeSinceWaiting = -1.0f;
-                            break;
-                        }
-
-                        PLog.Trace<ScrapperLogger>($"Download of addressables for {key} in progress {status.Percent * 100:##0.##}% at {currentTime.ToShortTimeString()} - {status.DownloadedBytes}");
-                        progressCallback?.Invoke(status.Percent);
-                        ProgressCallback?.Invoke(key, status.Percent, status.DownloadedBytes);
-
-                        if (downloadByteSamples.Count >= maxSamples)
-                        {
-                            long avg = downloadByteSamples.Sum() / downloadByteSamples.Count;
-                            if (avg == downloadedBytes) // Stalled for 2 * maxSamples seconds
-                            {
-                                _failed = true;
-                                break;
-                            }
-                        }
-                    }
-                    catch (Exception e)
-                    {
-                        PLog.Error($"Exception on download status: {e.ToString()}");
+                        PLog.Error<ScrapperLogger>("Download ERROR:" + error);
                         _failed = true;
                     }
-
-                    yield return status.Percent;
-                }
-
-                if (!_failed)
-                {
-                    progressCallback?.Invoke(status.Percent);
+                
+                    var status = downloadDependencies.GetDownloadStatus();
+                    progressHandler.Report(status.Percent);
+                
                     ProgressCallback?.Invoke(key, status.Percent, status.DownloadedBytes);
-                    
-                    yield return status.Percent;
-
-                    fullyDownloaded = true;
                 }
-                else
-                {
-                    if (downloadDependencies.IsValid())
-                    {
-                        PLog.Warn<ScrapperLogger>($"Releasing addressable AsyncOperation {downloadDependencies}...");
-                        Addressables.Release(downloadDependencies);
-                    }
-            
-                    yield return status.Percent;
-                }
-
             }
+            else
+                await downloadDependencies.Task;
+ 
+            var finalStatus = downloadDependencies.GetDownloadStatus();
 
+            progressHandler?.Report(finalStatus.Percent);
+            ProgressCallback?.Invoke(key, finalStatus.Percent, finalStatus.DownloadedBytes);
+            
+            if (_failed)
+            {
+                if (downloadDependencies.IsValid())
+                {
+                    PLog.Warn<ScrapperLogger>($"Releasing addressable AsyncOperation {downloadDependencies}...");
+                    Addressables.Release(downloadDependencies);
+                }
+            }
+            
             PLog.Info<ScrapperLogger>($"Finished download of addressables for {key}");
-            yield return 1.0f;
+            progressHandler?.Report(1);
+            ProgressCallback?.Invoke(key, 1, finalStatus.DownloadedBytes);
         }
         
         private string GetDownloadError(AsyncOperationHandle fromHandle)
@@ -153,26 +110,6 @@ namespace Rhinox.Scrapper
                 e = e.InnerException;
             }
             return null;
-        }
-
-        private bool CheckStalledOperation(AsyncOperationHandle handle)
-        {
-            bool waitingForActivation = handle.Task.Status == TaskStatus.WaitingForActivation;
-            if (!waitingForActivation)
-            {
-                _timeSinceWaiting = -1.0f;
-                return false;
-            }
-            
-            if (_timeSinceWaiting < 0.0f)
-                _timeSinceWaiting = Time.realtimeSinceStartup;
-            else
-            {
-                if ((Time.realtimeSinceStartup - _timeSinceWaiting) > TASK_STALL_TIMEOUT)
-                    return true;
-            }
-
-            return false;
         }
     }
 }
