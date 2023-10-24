@@ -57,13 +57,13 @@ namespace Rhinox.Scrapper
             Initialized
         }
 
-        public static IEnumerator InitializeAsync()
+        public static async Task InitializeAsync()
         {
             PLog.Debug($"{nameof(InitializeAsync)} started...");
             if (_initializingState != InitializingState.None)
             {
                 PLog.Debug($"{nameof(InitializeAsync)} cancelled, current state: {_initializingState.ToString()}");
-                yield break;
+                return;
             }
 
             _initializingState = InitializingState.Initializing;
@@ -76,11 +76,9 @@ namespace Rhinox.Scrapper
                 const string initFailMessage = "Failed to initialize Scrapper, Addressable initialization failed...";
                 PLog.Warn<ScrapperLogger>(initFailMessage);
                 CustomErrorHandling?.Invoke(initFailMessage);
-                yield break;
             }
 
-            yield return initAction;
-            
+            await initAction.Task;
             
             Addressables.ClearResourceLocators();
 
@@ -90,7 +88,6 @@ namespace Rhinox.Scrapper
                 const string cacheFolderFailMsg = "Failed to initialize Scrapper, cache folder could not be created/loaded...";
                 PLog.Warn<ScrapperLogger>(cacheFolderFailMsg);
                 CustomErrorHandling?.Invoke(cacheFolderFailMsg);
-                yield break;
             }
             
             _initializingState = InitializingState.Initialized;
@@ -122,14 +119,14 @@ namespace Rhinox.Scrapper
             return true;
         }
 
-        public static IEnumerator LoadCatalogAsync(string remotePath)
+        public static async Task LoadCatalogAsync(string remotePath)
         {
             if (!remotePath.EndsWith(".json"))
             {
                 string catalogPathErrMsg = $"Path not supported for catalog '{remotePath}', must end in .json";
                 PLog.Debug<ScrapperLogger>(catalogPathErrMsg);
                 CustomErrorHandling?.Invoke(catalogPathErrMsg);
-                yield break;
+                return;
             }
 
             // Handle hash file
@@ -138,7 +135,7 @@ namespace Rhinox.Scrapper
                 string catalogHashUpdateFailMsg = $"Could not check catalog hash at '{remotePath}', exiting...";
                 PLog.Debug<ScrapperLogger>(catalogHashUpdateFailMsg);
                 CustomErrorHandling?.Invoke(catalogHashUpdateFailMsg);
-                yield break;
+                return;
             }
             
             // Handle catalog
@@ -153,14 +150,14 @@ namespace Rhinox.Scrapper
             // Load cached catalog in Addressable system
             PLog.Debug<ScrapperLogger>($"{nameof(LoadCatalogAsync)} load content catalog at {remotePath}...");
             var catalogResult = new CatalogLoadResult();
-            yield return AddressableUtility.LoadContentCatalogAsync(remotePath, catalogResult);
+            await AddressableUtility.LoadContentCatalogAsync(remotePath, catalogResult);
 
             if (catalogResult.Status != AsyncOperationStatus.Succeeded)
             {
                 const string addressableLoadFailMsg = "Load Content Catalog failed, Addressable Failure";
                 PLog.Error<ScrapperLogger>(addressableLoadFailMsg);
                 CustomErrorHandling?.Invoke(addressableLoadFailMsg);
-                yield break;
+                return;
             }
 
             var resourceLocator = catalogResult.Result;
@@ -173,7 +170,7 @@ namespace Rhinox.Scrapper
                 string resourceLocatorExistsMsg = $"ResourceLocator with id '{resourceLocator.LocatorId}' already registered, exiting...";
                 PLog.Warn<ScrapperLogger>(resourceLocatorExistsMsg);
                 CustomErrorHandling?.Invoke(resourceLocatorExistsMsg);
-                yield break;
+                return;
             }
             
             Addressables.AddResourceLocator(resourceLocator);

@@ -3,6 +3,7 @@ using System.Collections;
 using System.Collections.Generic;
 using System.Globalization;
 using System.Reflection;
+using System.Threading.Tasks;
 using Rhinox.Perceptor;
 using UnityEngine;
 using UnityEngine.AddressableAssets;
@@ -28,20 +29,15 @@ namespace Rhinox.Scrapper
         /// <summary>
         /// Loads Addressables into cache
         /// </summary>
-        public static IEnumerator LoadContentCatalogAsync(string remotePath, CatalogLoadResult result)
+        public static async Task LoadContentCatalogAsync(string remotePath, CatalogLoadResult result)
         {
             if (result == null)
                 throw new ArgumentNullException(nameof(result));
             
             AsyncOperationHandle loadCatalog = Addressables.LoadContentCatalogAsync(remotePath);
-            yield return loadCatalog;
-
-            int tryCount = 0;
-            while (tryCount < 10 && loadCatalog.Status == AsyncOperationStatus.None)
-            {
-                ++tryCount;
-                yield return new WaitForEndOfFrame();
-            }
+            await loadCatalog.Task;
+            
+            // TODO: 10 frames were waited here... Still do that?
 
             result.Status = loadCatalog.Status == AsyncOperationStatus.None
                 ? AsyncOperationStatus.Failed
@@ -50,13 +46,13 @@ namespace Rhinox.Scrapper
             if (result.Status == AsyncOperationStatus.Failed)
             {
                 PLog.Error<ScrapperLogger>($"{nameof(LoadContentCatalogAsync)} failed - {loadCatalog.OperationException?.Message}");
-                yield break;
+                return;
             }
 
             if (!(loadCatalog.Task.Result is IResourceLocator))
             {
                 result.Status = AsyncOperationStatus.Failed;
-                yield break;
+                return;
             }
 
             result.Result = (IResourceLocator)loadCatalog.Task.Result;

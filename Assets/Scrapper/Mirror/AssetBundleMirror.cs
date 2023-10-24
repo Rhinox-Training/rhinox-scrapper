@@ -69,7 +69,7 @@ namespace Rhinox.Scrapper
             {
                 if (_bundleInfoByBundleName.ContainsKey(bundle.Request.BundleName))
                 {
-                    PLog.Trace<ScrapperLogger>($"Already cached bundle with name '{bundle.Request.BundleName}', skipping...");
+                    // PLog.Trace<ScrapperLogger>($"Already cached bundle with name '{bundle.Request.BundleName}', skipping...");
                     continue;
                 }
                 
@@ -167,7 +167,7 @@ namespace Rhinox.Scrapper
                 
                 if (info.IsCached)
                 {
-                    PLog.Trace<ScrapperLogger>($"Already downloaded bundle with name '{info.BundleName}', skipping...");
+                    // PLog.Trace<ScrapperLogger>($"Already downloaded bundle with name '{info.BundleName}', skipping...");
                     continue;
                 }
 
