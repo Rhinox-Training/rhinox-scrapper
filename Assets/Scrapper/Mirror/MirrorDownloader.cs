@@ -57,7 +57,7 @@ namespace Rhinox.Scrapper
             return true;
         }
         
-        public async Task DownloadAssetAsync(string relativeFilePath, IProgress<float> progressHandler, int timeout, int retryCount = 3, bool overwrite = false)
+        public async Task DownloadAssetAsync(string relativeFilePath, int timeout, int retryCount = 3, bool overwrite = false)
         {
             if (_downloadHandler != null)
             {
@@ -80,14 +80,21 @@ namespace Rhinox.Scrapper
                 return;
             }
 
+            string error;
             int tryCount = 0;
             UnityWebRequest www;
             do
             {
                 PLog.Debug<ScrapperLogger>($"Downloading {path}...");
                 www = UnityWebRequest.Get(path);
-                await ExecuteWebRequest(www, progressHandler, timeout);
+                www.timeout = timeout;
+                await www.SendWebRequest();
 
+                if (!www.IsRequestValid(out error))
+                    PLog.Error<ScrapperLogger>($"Download failed with error '{error}'...");
+
+                _downloadHandler = www.downloadHandler;
+                
                 if (_downloadHandler == null)
                     tryCount++;
                 
@@ -99,7 +106,7 @@ namespace Rhinox.Scrapper
                 return;
             }
             
-            if (!www.IsRequestValid(out string error))
+            if (!www.IsRequestValid(out error))
             {
                 PLog.Error<ScrapperLogger>($"Download failed with error '{error}', can't download resource '{relativeFilePath}'...");
                 return;
@@ -124,20 +131,6 @@ namespace Rhinox.Scrapper
             }
         }
         
-        private static async Task ExecuteWebRequest(UnityWebRequest www, IProgress<float> downloadProgress, int timeOut)
-        {
-            // path = path.Replace("http://", "file:///");
-            // path = path.Replace("https://", "file:///");
-            www.timeout = timeOut;
-            var task = www.SendWebRequest();
-
-            while (!task.isDone)
-            {
-                downloadProgress.Report(www.downloadProgress);
-                await Task.Delay(100); 
-            }
-        }
-
         public bool ClearTargetAsset(string relativeFilePath)
         {
             if (string.IsNullOrWhiteSpace(relativeFilePath))

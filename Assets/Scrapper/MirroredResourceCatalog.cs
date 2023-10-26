@@ -3,6 +3,7 @@ using System.Collections;
 using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
+using System.Threading;
 using System.Threading.Tasks;
 using Rhinox.Lightspeed;
 using Rhinox.Perceptor;
@@ -51,7 +52,8 @@ namespace Rhinox.Scrapper
         public async Task LoadAsset<T>(object key, Action<T> onCompleted, T fallbackObject = default(T))
             where T : class
         {
-            await _bundleMirror.TryLoadBundlesFor(key, null);
+            var task =  _bundleMirror.TryLoadBundlesFor(key, null);
+            await task;
             
             T loadedAsset = default(T);
             if (AddressableResourceExists<T>(key))
@@ -112,7 +114,7 @@ namespace Rhinox.Scrapper
             return totalBytes;
         }
 
-        public async Task PreloadAllAssetsAsync(IProgress<ProgressBytes> progressHandler, params object[] keys)
+        public async Task PreloadAllAssetsAsync(IProgress<ProgressBytes> progressHandler, CancellationToken token, params object[] keys)
         {
             float keyLength = keys.Length;
             if (keyLength == 0)
@@ -139,6 +141,9 @@ namespace Rhinox.Scrapper
                 // Make sure it doesn't reach '1' yet
                 progress = offset + (keySectionSize * 0.999f);
                 progressHandler.Report(new ProgressBytes(progress, totalBytes));
+
+                if (token.IsCancellationRequested)
+                    return;
             }
 
             progressHandler.Report(new ProgressBytes(1f, totalBytes));

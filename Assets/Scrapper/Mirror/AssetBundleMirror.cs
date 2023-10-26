@@ -140,7 +140,8 @@ namespace Rhinox.Scrapper
             }
             
             float bundleCountDenominator = Mathf.Max((bundles.Length - 1), 1);
-            
+            float chunkSize = 1.0f / bundleCountDenominator;
+
             // Ensure all bundles have their info set
             for (int i = 0; i < bundles.Length; ++i)
             {
@@ -162,6 +163,8 @@ namespace Rhinox.Scrapper
             // Download bundles (if not cached)
             for (int i = 0; i < bundles.Length; ++i)
             {
+                float progress = i / bundleCountDenominator;
+
                 var bundle = bundles[i];
                 var info = _bundleInfoByBundleName[GetBundleKey(bundle)];
                 
@@ -170,19 +173,11 @@ namespace Rhinox.Scrapper
                     // PLog.Trace<ScrapperLogger>($"Already downloaded bundle with name '{info.BundleName}', skipping...");
                     continue;
                 }
+                
+                await _downloader.DownloadAssetAsync(info.RemoteBundleSubpath, 180);
 
-                Progress<float> chunkProgressHandler = null;
-                if (progressHandler != null)
-                {
-                    float chunkSize = 1.0f / bundleCountDenominator;
-                    float progress = i / bundleCountDenominator;
-                    
-                    chunkProgressHandler = new Progress<float>();
-                    chunkProgressHandler.ProgressChanged += (_, v) => progressHandler.Report(progress + v * chunkSize);
-                }
-                
-                await _downloader.DownloadAssetAsync(info.RemoteBundleSubpath, chunkProgressHandler, 180);
-                
+                progressHandler?.Report(progress + chunkSize);
+
                 info.MarkCached(true);
             }
 

@@ -5,6 +5,7 @@ using System.Diagnostics;
 using System.Globalization;
 using System.IO;
 using System.Linq;
+using System.Threading;
 using System.Threading.Tasks;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
@@ -189,13 +190,13 @@ namespace Rhinox.Scrapper
         }
 
 
-        public static async Task PreloadAsync(params object[] keys)
+        public static async Task PreloadAsync(CancellationToken token, params object[] keys)
         {
             var progressHandler = new Progress<float>();
-            await PreloadAsync(progressHandler, keys);
+            await PreloadAsync(progressHandler, token, keys);
         }
-
-        public static async Task PreloadAsync(IProgress<float> progressHandler, params object[] keys)
+        
+        public static async Task PreloadAsync(IProgress<float> progressHandler, CancellationToken token, params object[] keys)
         {
             var locators = _resourceLocators.Values.ToArray();
             
@@ -205,7 +206,7 @@ namespace Rhinox.Scrapper
             for (var i = 0; i < locators.Length; i++)
                 bytes[i] = locators[i].GetTotalByteSize(keys);
             totalBytes = bytes.Sum();
-
+            
             // Divide it into sections (first = assets, second = dependencies)
             const float initialSectionSize = .8f;
             const float secondarySectionSize = 1f - initialSectionSize;
@@ -218,16 +219,15 @@ namespace Rhinox.Scrapper
                 PLog.Trace<ScrapperLogger>($"Starting preload for '{locator.Locator.LocatorId}'");
                 try
                 {
-                    var subProgressHandler = new Progress<float>();
-                    subProgressHandler.ProgressChanged += (_, v) =>
+                    var subHandler = new Progress<ProgressBytes>();
+                    // var subHandler = ProgressHelper.PipeBytes(progressHandler, partDone, fraction);
+                    subHandler.ProgressChanged += (_, v) =>
                     {
-                        var progress = partDone + fraction * v;
+                        var progress = partDone + fraction * v.Progress;
                         progressHandler.Report(progress);
-                        PreloadProgressCallback?.Invoke(keys, new ProgressBytes(v, totalBytes));
+                        PreloadProgressCallback?.Invoke(keys, new ProgressBytes(progress, totalBytes));
                     };
-                    
-                    var subHandler = ProgressHelper.PipeBytes(progressHandler, partDone, fraction);
-                    await locator.PreloadAllAssetsAsync(subHandler, keys);
+                    await locator.PreloadAllAssetsAsync(subHandler, token, keys);
                 }
                 catch (Exception e)
                 {
@@ -241,6 +241,9 @@ namespace Rhinox.Scrapper
                 PLog.Trace<ScrapperLogger>($"Preload for '{locator.Locator.LocatorId}' done...");
 
                 bytesDownloaded += bytes[i];
+
+                if (token.IsCancellationRequested)
+                    return;
             }
 
             // Start secondary section
@@ -260,6 +263,9 @@ namespace Rhinox.Scrapper
                 
                 var addrDepLoader = new AddressableDependenciesDownloader();
                 await addrDepLoader.DownloadAsync(key, subProgressHandler);
+                
+                if (token.IsCancellationRequested)
+                    return;
             }
             
             progressHandler.Report(1);
